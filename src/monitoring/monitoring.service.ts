@@ -9,6 +9,7 @@ import {
   StockHistory,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ListingsService } from '../listings/listings.service';
 import {
   SUPPLIER_PRODUCT_PROVIDER,
   SupplierProduct,
@@ -40,6 +41,7 @@ export class MonitoringService {
     private readonly prisma: PrismaService,
     @Inject(SUPPLIER_PRODUCT_PROVIDER)
     private readonly supplier: SupplierProductProvider,
+    private readonly listings: ListingsService,
   ) {}
 
   async priceHistory(productId?: string): Promise<PriceHistory[]> {
@@ -323,6 +325,7 @@ export class MonitoringService {
       where: { id: rule.productId },
       data: { costPrice: current },
     });
+    await this.listings.maybeAutoUpdateFromProduct(rule.productId);
 
     let alertsCreated = 0;
     if (significant) {
@@ -359,6 +362,7 @@ export class MonitoringService {
       where: { id: rule.productId },
       data: { stock: current },
     });
+    await this.listings.maybeAutoUpdateFromProduct(rule.productId);
 
     let alertsCreated = 0;
     if (previous > 0 && current <= 0) {

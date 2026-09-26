@@ -17,15 +17,18 @@ exports.MonitoringService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../common/prisma/prisma.service");
+const listings_service_1 = require("../listings/listings.service");
 const aliexpress_types_1 = require("../integrations/aliexpress/aliexpress.types");
 const round = (value) => Math.round(value * 100) / 100;
 let MonitoringService = MonitoringService_1 = class MonitoringService {
     prisma;
     supplier;
+    listings;
     logger = new common_1.Logger(MonitoringService_1.name);
-    constructor(prisma, supplier) {
+    constructor(prisma, supplier, listings) {
         this.prisma = prisma;
         this.supplier = supplier;
+        this.listings = listings;
     }
     async priceHistory(productId) {
         return this.prisma.priceHistory.findMany({
@@ -287,6 +290,7 @@ let MonitoringService = MonitoringService_1 = class MonitoringService {
             where: { id: rule.productId },
             data: { costPrice: current },
         });
+        await this.listings.maybeAutoUpdateFromProduct(rule.productId);
         let alertsCreated = 0;
         if (significant) {
             const increased = change > 0;
@@ -319,6 +323,7 @@ let MonitoringService = MonitoringService_1 = class MonitoringService {
             where: { id: rule.productId },
             data: { stock: current },
         });
+        await this.listings.maybeAutoUpdateFromProduct(rule.productId);
         let alertsCreated = 0;
         if (previous > 0 && current <= 0) {
             await this.createAlert({
@@ -491,6 +496,6 @@ exports.MonitoringService = MonitoringService;
 exports.MonitoringService = MonitoringService = MonitoringService_1 = __decorate([
     (0, common_1.Injectable)(),
     __param(1, (0, common_1.Inject)(aliexpress_types_1.SUPPLIER_PRODUCT_PROVIDER)),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService, Object])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService, Object, listings_service_1.ListingsService])
 ], MonitoringService);
 //# sourceMappingURL=monitoring.service.js.map

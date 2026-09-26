@@ -16,8 +16,17 @@ exports.ListingsController = void 0;
 const openapi = require("@nestjs/swagger");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const class_validator_1 = require("class-validator");
+const current_user_decorator_1 = require("../auth/current-user.decorator");
 const listing_dto_1 = require("./dto/listing.dto");
 const listings_service_1 = require("./listings.service");
+class AutoUpdateDto {
+    enabled;
+}
+__decorate([
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], AutoUpdateDto.prototype, "enabled", void 0);
 let ListingsController = class ListingsController {
     listingsService;
     constructor(listingsService) {
@@ -34,6 +43,12 @@ let ListingsController = class ListingsController {
     }
     update(id, dto) {
         return this.listingsService.update(id, dto);
+    }
+    publish(id, user) {
+        return this.listingsService.publish(id, user);
+    }
+    autoUpdate(id, dto) {
+        return this.listingsService.setAutoUpdate(id, dto.enabled);
     }
     remove(id) {
         return this.listingsService.remove(id);
@@ -74,8 +89,26 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], ListingsController.prototype, "update", null);
 __decorate([
-    (0, common_1.Delete)(':id'),
+    (0, common_1.Post)(':id/publish'),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], ListingsController.prototype, "publish", null);
+__decorate([
+    (0, common_1.Patch)(':id/auto-update'),
     openapi.ApiResponse({ status: 200, type: Object }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, AutoUpdateDto]),
+    __metadata("design:returntype", Promise)
+], ListingsController.prototype, "autoUpdate", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    openapi.ApiResponse({ status: 200 }),
     __param(0, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),

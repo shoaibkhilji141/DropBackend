@@ -16,14 +16,15 @@ exports.UsersController = void 0;
 const openapi = require("@nestjs/swagger");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const current_user_decorator_1 = require("../auth/current-user.decorator");
 const users_service_1 = require("./users.service");
 let UsersController = class UsersController {
     usersService;
     constructor(usersService) {
         this.usersService = usersService;
     }
-    me() {
-        return this.usersService.findCurrent();
+    me(user) {
+        return this.usersService.findCurrent(user);
     }
     findAll() {
         return this.usersService.findAll();
@@ -35,21 +36,22 @@ let UsersController = class UsersController {
 exports.UsersController = UsersController;
 __decorate([
     (0, common_1.Get)('me'),
-    openapi.ApiResponse({ status: 200, type: Object }),
+    openapi.ApiResponse({ status: 200 }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
+    __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "me", null);
 __decorate([
     (0, common_1.Get)(),
-    openapi.ApiResponse({ status: 200, type: [Object] }),
+    openapi.ApiResponse({ status: 200 }),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "findAll", null);
 __decorate([
     (0, common_1.Get)(':id'),
-    openapi.ApiResponse({ status: 200, type: Object }),
+    openapi.ApiResponse({ status: 200 }),
     __param(0, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),

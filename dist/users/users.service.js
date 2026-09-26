@@ -27,7 +27,28 @@ let UsersService = class UsersService {
         }
         return user;
     }
-    async findCurrent() {
+    async findCurrent(identity) {
+        if (identity?.sub) {
+            const existing = await this.prisma.user.findUnique({ where: { auth0Id: identity.sub } });
+            if (existing)
+                return existing;
+            if (identity.email) {
+                const byEmail = await this.prisma.user.findUnique({ where: { email: identity.email } });
+                if (byEmail) {
+                    return this.prisma.user.update({
+                        where: { id: byEmail.id },
+                        data: { auth0Id: identity.sub },
+                    });
+                }
+            }
+            return this.prisma.user.create({
+                data: {
+                    auth0Id: identity.sub,
+                    email: identity.email ?? `${identity.sub.replace(/[^a-z0-9]/gi, '')}@auth.local`,
+                    name: identity.email ?? 'Seller',
+                },
+            });
+        }
         const user = await this.prisma.user.findFirst({ orderBy: { createdAt: 'asc' } });
         if (!user) {
             throw new common_1.NotFoundException('No user found. Run `npm run prisma:seed`.');

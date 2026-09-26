@@ -11,6 +11,7 @@ exports.JobsModule = void 0;
 const bullmq_1 = require("@nestjs/bullmq");
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
+const configuration_1 = require("../config/configuration");
 const monitoring_module_1 = require("../monitoring/monitoring.module");
 const jobs_controller_1 = require("./jobs.controller");
 const monitoring_scheduler_service_1 = require("./monitoring-scheduler.service");
@@ -24,7 +25,7 @@ const defaultJobOptions = {
 };
 let JobsModule = JobsModule_1 = class JobsModule {
     static register() {
-        const redisEnabled = process.env.REDIS_ENABLED === 'true';
+        const redisEnabled = (0, configuration_1.isRedisEnabled)();
         if (!redisEnabled) {
             return { module: JobsModule_1 };
         }

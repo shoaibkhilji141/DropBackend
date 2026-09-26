@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { OrderStatus } from '@prisma/client';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { AuthenticatedUser } from '../auth/jwt.strategy';
 import { ListOrdersQueryDto, UpdateOrderDto } from './dto/order.dto';
 import { OrdersService } from './orders.service';
 import { OrderView } from './orders.types';
@@ -18,6 +20,19 @@ export class OrdersController {
   @Get('summary')
   summary(): Promise<{ status: OrderStatus; count: number }[]> {
     return this.ordersService.summary();
+  }
+
+  @Post('sync')
+  sync(@CurrentUser() user?: AuthenticatedUser): Promise<{ upserted: number }> {
+    return this.ordersService.syncFromEbay(user);
+  }
+
+  @Post(':id/push-tracking')
+  pushTracking(
+    @Param('id') id: string,
+    @CurrentUser() user?: AuthenticatedUser,
+  ): Promise<OrderView> {
+    return this.ordersService.pushTracking(id, user);
   }
 
   @Get(':id')

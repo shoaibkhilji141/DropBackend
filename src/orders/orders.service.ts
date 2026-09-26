@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { FulfillmentStatus, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { AuthenticatedUser } from '../auth/jwt.strategy';
+import { EbayService } from '../integrations/ebay/ebay.service';
 import { ProfitService } from '../profit/profit.service';
+import { UsersService } from '../users/users.service';
 import { ListOrdersQueryDto, UpdateOrderDto } from './dto/order.dto';
 import { OrderRecord, OrderView } from './orders.types';
 
@@ -16,6 +19,8 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly profit: ProfitService,
+    private readonly ebay: EbayService,
+    private readonly users: UsersService,
   ) {}
 
   async findAll(query: ListOrdersQueryDto): Promise<OrderView[]> {
@@ -74,6 +79,29 @@ export class OrdersService {
     return this.toView(order);
   }
 
+  async syncFromEbay(identity?: AuthenticatedUser): Promise<{ upserted: number }> {
+    const user = await this.users.findCurrent(identity);
+    const upserted = await this.ebay.syncOrders(user.id);
+    return { upserted };
+  }
+
+  async pushTracking(id: string, identity?: AuthenticatedUser): Promise<OrderView> {
+    const user = await this.users.findCurrent(identity);
+    try {
+      await this.ebay.pushTracking(user.id, id);
+      const order = await this.prisma.order.update({
+        where: { id },
+        data: { lastError: null },
+        include: ORDER_INCLUDE,
+      });
+      return this.toView(order);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not push tracking to eBay';
+      await this.prisma.order.update({ where: { id }, data: { lastError: message } });
+      throw error;
+    }
+  }
+
   async summary(): Promise<{ status: OrderStatus; count: number }[]> {
     const grouped = await this.prisma.order.groupBy({
       by: ['status'],
@@ -130,6 +158,7 @@ export class OrdersService {
       shippingCost: order.shippingCost,
       trackingCode: order.trackingCode,
       trackingCarrier: order.trackingCarrier,
+      lastError: order.lastError,
       shippedAt: order.shippedAt?.toISOString() ?? null,
       placedAt: order.placedAt.toISOString(),
       items: order.items.map((item) => ({

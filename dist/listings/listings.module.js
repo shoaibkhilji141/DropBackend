@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ListingsModule = void 0;
 const common_1 = require("@nestjs/common");
 const ebay_module_1 = require("../integrations/ebay/ebay.module");
+const users_module_1 = require("../users/users.module");
 const listings_controller_1 = require("./listings.controller");
 const listings_service_1 = require("./listings.service");
 let ListingsModule = class ListingsModule {
@@ -16,7 +17,7 @@ let ListingsModule = class ListingsModule {
 exports.ListingsModule = ListingsModule;
 exports.ListingsModule = ListingsModule = __decorate([
     (0, common_1.Module)({
-        imports: [ebay_module_1.EbayModule],
+        imports: [ebay_module_1.EbayModule, users_module_1.UsersModule],
         controllers: [listings_controller_1.ListingsController],
         providers: [listings_service_1.ListingsService],
         exports: [listings_service_1.ListingsService],

@@ -19,10 +19,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  stores     Store[]
-  products   Product[]
-  aiRequests AIRequest[]
-  alerts     Alert[]
+  stores               Store[]
+  products             Product[]
+  aiRequests           AIRequest[]
+  alerts               Alert[]
+  integrationAccounts  IntegrationAccount[]
 }
 
 /// A marketplace account the seller sells through (currently eBay only).
@@ -153,6 +154,9 @@ model Listing {
   selectedVariantIds String?
   status        ListingStatus @default(DRAFT)
   publishedAt   DateTime?
+  offerId       String?
+  lastError     String?
+  autoUpdateEnabled Boolean   @default(false)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -182,6 +186,9 @@ model Order {
   shippingCost Float       @default(0)
   trackingCode String?
   trackingCarrier String?
+  /// eBay line-item ids used when pushing tracking, stored as JSON.
+  lineItemData String?
+  lastError    String?
   shippedAt    DateTime?
   placedAt     DateTime    @default(now())
   createdAt    DateTime    @default(now())
@@ -354,6 +361,33 @@ model Alert {
 // ---------------------------------------------------------------------------
 // Enums (SQLite stores these as strings)
 // ---------------------------------------------------------------------------
+
+/// Per-user OAuth tokens for eBay / AliExpress. Tokens are never returned by the API.
+model IntegrationAccount {
+  id             String     @id @default(cuid())
+  userId         String
+  platform       Platform
+  status         LinkStatus @default(DISCONNECTED)
+  externalUserId String?
+  displayName    String?
+  accountEmail   String?
+  accessToken    String?
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+  scopes         String?
+  marketplaceId  String?
+  lastError      String?
+  lastSyncedAt   DateTime?
+  /// JSON string array of official API methods confirmed available.
+  capabilities   String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+  @@index([platform, status])
+}
 
 enum Platform {
   EBAY

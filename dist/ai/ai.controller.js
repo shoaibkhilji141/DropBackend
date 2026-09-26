@@ -55,7 +55,7 @@ __decorate([
 ], AiController.prototype, "status", null);
 __decorate([
     (0, common_1.Get)('history'),
-    openapi.ApiResponse({ status: 200, type: [Object] }),
+    openapi.ApiResponse({ status: 200 }),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)

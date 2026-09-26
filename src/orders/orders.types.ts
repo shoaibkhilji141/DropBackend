@@ -36,6 +36,7 @@ export interface OrderView {
   shippingCost: number;
   trackingCode: string | null;
   trackingCarrier: string | null;
+  lastError: string | null;
   shippedAt: string | null;
   placedAt: string;
   items: OrderItemView[];

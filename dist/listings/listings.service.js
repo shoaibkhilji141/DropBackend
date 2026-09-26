@@ -14,14 +14,20 @@ const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const json_1 = require("../common/json");
 const prisma_service_1 = require("../common/prisma/prisma.service");
+const ebay_service_1 = require("../integrations/ebay/ebay.service");
+const users_service_1 = require("../users/users.service");
 const LISTING_INCLUDE = {
     product: { include: { variants: true } },
     store: true,
 };
 let ListingsService = class ListingsService {
     prisma;
-    constructor(prisma) {
+    ebay;
+    users;
+    constructor(prisma, ebay, users) {
         this.prisma = prisma;
+        this.ebay = ebay;
+        this.users = users;
     }
     async findAll(query) {
         const listings = await this.prisma.listing.findMany({
@@ -106,6 +112,34 @@ let ListingsService = class ListingsService {
         await this.findRecord(id);
         return this.prisma.listing.delete({ where: { id } });
     }
+    async publish(id, identity) {
+        const user = await this.users.findCurrent(identity);
+        return this.toView(await this.ebay.publishListing(user.id, id));
+    }
+    async setAutoUpdate(id, enabled) {
+        await this.findRecord(id);
+        const listing = await this.prisma.listing.update({
+            where: { id },
+            data: { autoUpdateEnabled: enabled },
+            include: LISTING_INCLUDE,
+        });
+        return this.toView(listing);
+    }
+    async maybeAutoUpdateFromProduct(productId) {
+        const listings = await this.prisma.listing.findMany({
+            where: { productId, autoUpdateEnabled: true, status: client_1.ListingStatus.PUBLISHED },
+            include: { product: true, store: true },
+        });
+        for (const listing of listings) {
+            if (!listing.sku || !listing.store?.userId)
+                continue;
+            try {
+                await this.ebay.updateInventory(listing.store.userId, listing.sku, listing.price, listing.product?.stock ?? listing.quantity);
+            }
+            catch {
+            }
+        }
+    }
     async findRecord(id) {
         const listing = await this.prisma.listing.findUnique({
             where: { id },
@@ -143,6 +177,9 @@ let ListingsService = class ListingsService {
             selectedVariantIds: (0, json_1.parseStringArray)(listing.selectedVariantIds),
             status: listing.status,
             publishedAt: listing.publishedAt?.toISOString() ?? null,
+            offerId: listing.offerId,
+            lastError: listing.lastError,
+            autoUpdateEnabled: listing.autoUpdateEnabled,
             createdAt: listing.createdAt.toISOString(),
             updatedAt: listing.updatedAt.toISOString(),
             product: listing.product
@@ -175,6 +212,8 @@ let ListingsService = class ListingsService {
 exports.ListingsService = ListingsService;
 exports.ListingsService = ListingsService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        ebay_service_1.EbayService,
+        users_service_1.UsersService])
 ], ListingsService);
 //# sourceMappingURL=listings.service.js.map

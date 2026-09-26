@@ -2,6 +2,9 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Listing, ListingStatus, Prisma } from '@prisma/client';
 import { parseStringArray, stringifyStringArray } from '../common/json';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { EbayService } from '../integrations/ebay/ebay.service';
+import { UsersService } from '../users/users.service';
+import { AuthenticatedUser } from '../auth/jwt.strategy';
 import { CreateListingDto, ListListingsQueryDto, UpdateListingDto } from './dto/listing.dto';
 import { ListingRecord, ListingView } from './listings.types';
 
@@ -12,7 +15,11 @@ const LISTING_INCLUDE = {
 
 @Injectable()
 export class ListingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ebay: EbayService,
+    private readonly users: UsersService,
+  ) {}
 
   async findAll(query: ListListingsQueryDto): Promise<ListingView[]> {
     const listings = await this.prisma.listing.findMany({
@@ -110,6 +117,41 @@ export class ListingsService {
     return this.prisma.listing.delete({ where: { id } });
   }
 
+  async publish(id: string, identity?: AuthenticatedUser): Promise<ListingView> {
+    const user = await this.users.findCurrent(identity);
+    return this.toView(await this.ebay.publishListing(user.id, id));
+  }
+
+  async setAutoUpdate(id: string, enabled: boolean): Promise<ListingView> {
+    await this.findRecord(id);
+    const listing = await this.prisma.listing.update({
+      where: { id },
+      data: { autoUpdateEnabled: enabled },
+      include: LISTING_INCLUDE,
+    });
+    return this.toView(listing);
+  }
+
+  async maybeAutoUpdateFromProduct(productId: string): Promise<void> {
+    const listings = await this.prisma.listing.findMany({
+      where: { productId, autoUpdateEnabled: true, status: ListingStatus.PUBLISHED },
+      include: { product: true, store: true },
+    });
+    for (const listing of listings) {
+      if (!listing.sku || !listing.store?.userId) continue;
+      try {
+        await this.ebay.updateInventory(
+          listing.store.userId,
+          listing.sku,
+          listing.price,
+          listing.product?.stock ?? listing.quantity,
+        );
+      } catch {
+        // Auto-update is best-effort; listing.lastError is set by the caller if needed.
+      }
+    }
+  }
+
   private async findRecord(id: string): Promise<ListingRecord> {
     const listing = await this.prisma.listing.findUnique({
       where: { id },
@@ -150,6 +192,9 @@ export class ListingsService {
       selectedVariantIds: parseStringArray(listing.selectedVariantIds),
       status: listing.status,
       publishedAt: listing.publishedAt?.toISOString() ?? null,
+      offerId: listing.offerId,
+      lastError: listing.lastError,
+      autoUpdateEnabled: listing.autoUpdateEnabled,
       createdAt: listing.createdAt.toISOString(),
       updatedAt: listing.updatedAt.toISOString(),
       product: listing.product

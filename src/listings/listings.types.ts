@@ -22,6 +22,9 @@ export interface ListingView {
   selectedVariantIds: string[];
   status: ListingStatus;
   publishedAt: string | null;
+  offerId: string | null;
+  lastError: string | null;
+  autoUpdateEnabled: boolean;
   createdAt: string;
   updatedAt: string;
   product: {

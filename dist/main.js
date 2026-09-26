@@ -29,7 +29,11 @@ async function bootstrap() {
             .build());
         swagger_1.SwaggerModule.setup('docs', app, document);
     }
-    await app.listen(appConfig.port);
+    const port = Number(process.env.PORT) || 3000;
+    await app.listen(port, '0.0.0.0');
 }
-void bootstrap();
+void bootstrap().catch((error) => {
+    console.error('Failed to start NestJS', error);
+    process.exit(1);
+});
 //# sourceMappingURL=main.js.map

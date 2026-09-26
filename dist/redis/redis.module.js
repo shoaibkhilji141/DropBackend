@@ -75,18 +75,25 @@ exports.RedisModule = RedisModule = __decorate([
                         host: redis.host,
                         port: redis.port,
                         password: redis.password,
-                        maxRetriesPerRequest: null,
+                        maxRetriesPerRequest: 1,
                         lazyConnect: true,
+                        enableOfflineQueue: false,
+                        retryStrategy: () => null,
+                    });
+                    client.on('error', (error) => {
+                        logger.warn(`Redis error: ${error.message}`);
                     });
                     try {
                         await client.connect();
                         const reply = await client.ping();
                         logger.log(`Redis connected at ${redis.host}:${redis.port} (${reply})`);
+                        return new RedisClientHost(client);
                     }
                     catch (error) {
-                        logger.error(`Redis connection failed at ${redis.host}:${redis.port}: ${error instanceof Error ? error.message : error}`);
+                        logger.error(`Redis connection failed at ${redis.host}:${redis.port}: ${error instanceof Error ? error.message : error}. Continuing without queues.`);
+                        client.disconnect();
+                        return new RedisClientHost(null);
                     }
-                    return new RedisClientHost(client);
                 },
             },
         ],

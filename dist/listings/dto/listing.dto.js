@@ -30,7 +30,7 @@ class CreateListingDto {
     selectedVariantIds;
     status;
     static _OPENAPI_METADATA_FACTORY() {
-        return { productId: { required: true, type: () => String }, title: { required: true, type: () => String, maxLength: 80 }, description: { required: false, type: () => String }, images: { required: false, type: () => [String] }, category: { required: false, type: () => String }, sku: { required: false, type: () => String }, price: { required: false, type: () => Number, minimum: 0 }, quantity: { required: false, type: () => Number, minimum: 0 }, shippingMethod: { required: false, type: () => String }, shippingCost: { required: false, type: () => Number, minimum: 0 }, shippingEtaDays: { required: false, type: () => Number, minimum: 0 }, selectedVariantIds: { required: false, type: () => [String] }, status: { required: false, enum: ["DRAFT", "READY", "PUBLISHED", "PAUSED", "ENDED", "ERROR"] } };
+        return { productId: { required: true, type: () => String }, title: { required: true, type: () => String, maxLength: 80 }, description: { required: false, type: () => String }, images: { required: false, type: () => [String] }, category: { required: false, type: () => String }, sku: { required: false, type: () => String }, price: { required: false, type: () => Number, minimum: 0 }, quantity: { required: false, type: () => Number, minimum: 0 }, shippingMethod: { required: false, type: () => String }, shippingCost: { required: false, type: () => Number, minimum: 0 }, shippingEtaDays: { required: false, type: () => Number, minimum: 0 }, selectedVariantIds: { required: false, type: () => [String] }, status: { required: false, enum: ["ERROR", "DRAFT", "READY", "PUBLISHED", "PAUSED", "ENDED"] } };
     }
 }
 exports.CreateListingDto = CreateListingDto;
@@ -135,7 +135,7 @@ class UpdateListingDto {
     selectedVariantIds;
     status;
     static _OPENAPI_METADATA_FACTORY() {
-        return { title: { required: false, type: () => String, maxLength: 80 }, description: { required: false, type: () => String }, images: { required: false, type: () => [String] }, category: { required: false, type: () => String }, sku: { required: false, type: () => String }, price: { required: false, type: () => Number, minimum: 0 }, quantity: { required: false, type: () => Number, minimum: 0 }, shippingMethod: { required: false, type: () => String }, shippingCost: { required: false, type: () => Number, minimum: 0 }, shippingEtaDays: { required: false, type: () => Number, minimum: 0 }, selectedVariantIds: { required: false, type: () => [String] }, status: { required: false, enum: ["DRAFT", "READY", "PUBLISHED", "PAUSED", "ENDED", "ERROR"] } };
+        return { title: { required: false, type: () => String, maxLength: 80 }, description: { required: false, type: () => String }, images: { required: false, type: () => [String] }, category: { required: false, type: () => String }, sku: { required: false, type: () => String }, price: { required: false, type: () => Number, minimum: 0 }, quantity: { required: false, type: () => Number, minimum: 0 }, shippingMethod: { required: false, type: () => String }, shippingCost: { required: false, type: () => Number, minimum: 0 }, shippingEtaDays: { required: false, type: () => Number, minimum: 0 }, selectedVariantIds: { required: false, type: () => [String] }, status: { required: false, enum: ["ERROR", "DRAFT", "READY", "PUBLISHED", "PAUSED", "ENDED"] } };
     }
 }
 exports.UpdateListingDto = UpdateListingDto;
@@ -226,7 +226,7 @@ class ListListingsQueryDto {
     status;
     search;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["DRAFT", "READY", "PUBLISHED", "PAUSED", "ENDED", "ERROR"] }, search: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["ERROR", "DRAFT", "READY", "PUBLISHED", "PAUSED", "ENDED"] }, search: { required: false, type: () => String } };
     }
 }
 exports.ListListingsQueryDto = ListListingsQueryDto;

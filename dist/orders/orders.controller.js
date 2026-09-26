@@ -16,6 +16,7 @@ exports.OrdersController = void 0;
 const openapi = require("@nestjs/swagger");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const current_user_decorator_1 = require("../auth/current-user.decorator");
 const order_dto_1 = require("./dto/order.dto");
 const orders_service_1 = require("./orders.service");
 let OrdersController = class OrdersController {
@@ -28,6 +29,12 @@ let OrdersController = class OrdersController {
     }
     summary() {
         return this.ordersService.summary();
+    }
+    sync(user) {
+        return this.ordersService.syncFromEbay(user);
+    }
+    pushTracking(id, user) {
+        return this.ordersService.pushTracking(id, user);
     }
     findOne(id) {
         return this.ordersService.findOne(id);
@@ -52,6 +59,23 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], OrdersController.prototype, "summary", null);
+__decorate([
+    (0, common_1.Post)('sync'),
+    openapi.ApiResponse({ status: 201 }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], OrdersController.prototype, "sync", null);
+__decorate([
+    (0, common_1.Post)(':id/push-tracking'),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], OrdersController.prototype, "pushTracking", null);
 __decorate([
     (0, common_1.Get)(':id'),
     openapi.ApiResponse({ status: 200, type: Object }),

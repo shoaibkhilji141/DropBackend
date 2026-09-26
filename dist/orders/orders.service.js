@@ -13,7 +13,9 @@ exports.OrdersService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../common/prisma/prisma.service");
+const ebay_service_1 = require("../integrations/ebay/ebay.service");
 const profit_service_1 = require("../profit/profit.service");
+const users_service_1 = require("../users/users.service");
 const ORDER_INCLUDE = {
     items: true,
     store: true,
@@ -22,9 +24,13 @@ const ORDER_INCLUDE = {
 let OrdersService = class OrdersService {
     prisma;
     profit;
-    constructor(prisma, profit) {
+    ebay;
+    users;
+    constructor(prisma, profit, ebay, users) {
         this.prisma = prisma;
         this.profit = profit;
+        this.ebay = ebay;
+        this.users = users;
     }
     async findAll(query) {
         const orders = await this.prisma.order.findMany({
@@ -74,6 +80,28 @@ let OrdersService = class OrdersService {
             include: ORDER_INCLUDE,
         });
         return this.toView(order);
+    }
+    async syncFromEbay(identity) {
+        const user = await this.users.findCurrent(identity);
+        const upserted = await this.ebay.syncOrders(user.id);
+        return { upserted };
+    }
+    async pushTracking(id, identity) {
+        const user = await this.users.findCurrent(identity);
+        try {
+            await this.ebay.pushTracking(user.id, id);
+            const order = await this.prisma.order.update({
+                where: { id },
+                data: { lastError: null },
+                include: ORDER_INCLUDE,
+            });
+            return this.toView(order);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not push tracking to eBay';
+            await this.prisma.order.update({ where: { id }, data: { lastError: message } });
+            throw error;
+        }
     }
     async summary() {
         const grouped = await this.prisma.order.groupBy({
@@ -125,6 +153,7 @@ let OrdersService = class OrdersService {
             shippingCost: order.shippingCost,
             trackingCode: order.trackingCode,
             trackingCarrier: order.trackingCarrier,
+            lastError: order.lastError,
             shippedAt: order.shippedAt?.toISOString() ?? null,
             placedAt: order.placedAt.toISOString(),
             items: order.items.map((item) => ({
@@ -145,6 +174,8 @@ exports.OrdersService = OrdersService;
 exports.OrdersService = OrdersService = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
-        profit_service_1.ProfitService])
+        profit_service_1.ProfitService,
+        ebay_service_1.EbayService,
+        users_service_1.UsersService])
 ], OrdersService);
 //# sourceMappingURL=orders.service.js.map

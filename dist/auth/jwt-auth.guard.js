@@ -9,7 +9,6 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 var JwtAuthGuard_1;
-var _a, _b;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.JwtAuthGuard = void 0;
 const common_1 = require("@nestjs/common");
@@ -46,6 +45,7 @@ let JwtAuthGuard = JwtAuthGuard_1 = class JwtAuthGuard extends (0, passport_1.Au
 exports.JwtAuthGuard = JwtAuthGuard;
 exports.JwtAuthGuard = JwtAuthGuard = JwtAuthGuard_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [typeof (_a = typeof core_1.Reflector !== "undefined" && core_1.Reflector) === "function" ? _a : Object, typeof (_b = typeof config_1.ConfigService !== "undefined" && config_1.ConfigService) === "function" ? _b : Object])
+    __metadata("design:paramtypes", [core_1.Reflector,
+        config_1.ConfigService])
 ], JwtAuthGuard);
 //# sourceMappingURL=jwt-auth.guard.js.map

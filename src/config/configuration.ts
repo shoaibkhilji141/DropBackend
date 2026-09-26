@@ -3,6 +3,7 @@ export interface AppConfig {
   port: number;
   apiPrefix: string;
   corsOrigin: string;
+  frontendUrl: string;
   logLevel: string;
 }
 
@@ -28,6 +29,9 @@ export interface EbayConfig {
   certId: string;
   clientSecret: string;
   redirectUri: string;
+  ruName: string;
+  marketplaceId: string;
+  environment: 'production' | 'sandbox';
   configured: boolean;
 }
 
@@ -73,8 +77,9 @@ export function isRedisEnabled(): boolean {
   const host = str(process.env.REDIS_HOST, 'localhost');
   const nodeEnv = str(process.env.NODE_ENV, 'development');
   const isLoopback = host === 'localhost' || host === '127.0.0.1';
+  const hosted = nodeEnv === 'production' || Boolean(process.env.RENDER);
 
-  return !(nodeEnv === 'production' && isLoopback);
+  return !(hosted && isLoopback);
 }
 
 export const configuration = (): Configuration => {
@@ -87,12 +92,21 @@ export const configuration = (): Configuration => {
 
   const redisPassword = str(process.env.REDIS_PASSWORD);
 
+  const ebayRedirect = str(process.env.EBAY_REDIRECT_URI);
+  const ebayRuName = str(process.env.EBAY_RU_NAME, ebayRedirect.startsWith('http') ? '' : ebayRedirect);
   const ebay = {
     appId: str(process.env.EBAY_APP_ID),
     devId: str(process.env.EBAY_DEV_ID),
     certId: str(process.env.EBAY_CERT_ID),
-    clientSecret: str(process.env.EBAY_CLIENT_SECRET),
-    redirectUri: str(process.env.EBAY_REDIRECT_URI),
+    clientSecret: str(process.env.EBAY_CLIENT_SECRET) || str(process.env.EBAY_CERT_ID),
+    redirectUri: ebayRedirect,
+    ruName: ebayRuName,
+    marketplaceId: str(process.env.EBAY_MARKETPLACE_ID, 'EBAY_GB'),
+    environment:
+      str(process.env.EBAY_ENVIRONMENT, process.env.EBAY_APP_ID?.includes('SBX') ? 'sandbox' : 'production') ===
+      'sandbox'
+        ? ('sandbox' as const)
+        : ('production' as const),
   };
 
   const aliexpress = {
@@ -109,6 +123,7 @@ export const configuration = (): Configuration => {
       port: num(process.env.PORT, 3000),
       apiPrefix: str(process.env.API_PREFIX, 'api'),
       corsOrigin: str(process.env.CORS_ORIGIN, 'http://localhost:5173'),
+      frontendUrl: str(process.env.FRONTEND_URL, str(process.env.CORS_ORIGIN, 'http://localhost:5173').split(',')[0]),
       logLevel: str(process.env.LOG_LEVEL, 'debug'),
     },
     auth0: {
@@ -123,7 +138,7 @@ export const configuration = (): Configuration => {
     },
     ebay: {
       ...ebay,
-      configured: Boolean(ebay.appId && ebay.certId && ebay.clientSecret),
+      configured: Boolean(ebay.appId && ebay.certId && ebay.clientSecret && ebay.ruName),
     },
     aliexpress: {
       ...aliexpress,

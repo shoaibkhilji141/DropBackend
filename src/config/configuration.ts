@@ -61,6 +61,22 @@ const num = (value: string | undefined, fallback: number): number => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+/**
+ * Queues stay off unless Redis is explicitly enabled. Production + localhost
+ * is treated as disabled so a copied local .env cannot take down a Render boot.
+ */
+export function isRedisEnabled(): boolean {
+  if (str(process.env.REDIS_ENABLED, 'false') !== 'true') {
+    return false;
+  }
+
+  const host = str(process.env.REDIS_HOST, 'localhost');
+  const nodeEnv = str(process.env.NODE_ENV, 'development');
+  const isLoopback = host === 'localhost' || host === '127.0.0.1';
+
+  return !(nodeEnv === 'production' && isLoopback);
+}
+
 export const configuration = (): Configuration => {
   const auth0 = {
     domain: str(process.env.AUTH0_DOMAIN),
@@ -103,8 +119,7 @@ export const configuration = (): Configuration => {
       host: str(process.env.REDIS_HOST, 'localhost'),
       port: num(process.env.REDIS_PORT, 6379),
       password: redisPassword || undefined,
-      // Opt-in so the API boots cleanly when no local Redis is running.
-      enabled: str(process.env.REDIS_ENABLED, 'false') === 'true',
+      enabled: isRedisEnabled(),
     },
     ebay: {
       ...ebay,

@@ -1,7 +1,7 @@
 import { BullModule } from '@nestjs/bullmq';
 import { DynamicModule, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RedisConfig } from '../config/configuration';
+import { isRedisEnabled, RedisConfig } from '../config/configuration';
 import { MonitoringModule } from '../monitoring/monitoring.module';
 import { JobsController } from './jobs.controller';
 import { MonitoringScheduler } from './monitoring-scheduler.service';
@@ -25,7 +25,7 @@ const defaultJobOptions = {
 @Module({})
 export class JobsModule {
   static register(): DynamicModule {
-    const redisEnabled = process.env.REDIS_ENABLED === 'true';
+    const redisEnabled = isRedisEnabled();
 
     if (!redisEnabled) {
       return { module: JobsModule };

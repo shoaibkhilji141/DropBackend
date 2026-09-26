@@ -11,6 +11,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HealthController = void 0;
 const openapi = require("@nestjs/swagger");
@@ -55,7 +56,6 @@ exports.HealthController = HealthController = __decorate([
     (0, swagger_1.ApiTags)('health'),
     (0, common_1.Controller)('health'),
     __param(1, (0, common_1.Inject)(redis_module_1.REDIS_CLIENT)),
-    __metadata("design:paramtypes", [config_1.ConfigService,
-        redis_module_1.RedisClientHost])
+    __metadata("design:paramtypes", [typeof (_a = typeof config_1.ConfigService !== "undefined" && config_1.ConfigService) === "function" ? _a : Object, redis_module_1.RedisClientHost])
 ], HealthController);
 //# sourceMappingURL=health.controller.js.map

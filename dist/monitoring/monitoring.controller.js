@@ -11,6 +11,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var _a, _b;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MonitoringController = void 0;
 const openapi = require("@nestjs/swagger");
@@ -111,7 +112,7 @@ __decorate([
 __decorate([
     (0, common_1.Get)('price'),
     (0, swagger_1.ApiQuery)({ name: 'productId', required: false }),
-    openapi.ApiResponse({ status: 200 }),
+    openapi.ApiResponse({ status: 200, type: [Object] }),
     __param(0, (0, common_1.Query)('productId')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),
@@ -127,7 +128,7 @@ __decorate([
 __decorate([
     (0, common_1.Get)('stock'),
     (0, swagger_1.ApiQuery)({ name: 'productId', required: false }),
-    openapi.ApiResponse({ status: 200 }),
+    openapi.ApiResponse({ status: 200, type: [Object] }),
     __param(0, (0, common_1.Query)('productId')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),
@@ -143,7 +144,7 @@ __decorate([
 __decorate([
     (0, common_1.Get)('shipping'),
     (0, swagger_1.ApiQuery)({ name: 'productId', required: false }),
-    openapi.ApiResponse({ status: 200 }),
+    openapi.ApiResponse({ status: 200, type: [Object] }),
     __param(0, (0, common_1.Query)('productId')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),
@@ -185,7 +186,7 @@ __decorate([
     openapi.ApiResponse({ status: 200, type: [Object] }),
     __param(0, (0, common_1.Query)('type')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [typeof (_b = typeof client_1.MonitoringType !== "undefined" && client_1.MonitoringType) === "function" ? _b : Object]),
     __metadata("design:returntype", Promise)
 ], MonitoringController.prototype, "rules", null);
 __decorate([
@@ -217,8 +218,6 @@ exports.MonitoringController = MonitoringController = __decorate([
     (0, swagger_1.ApiTags)('monitoring'),
     (0, common_1.Controller)('monitoring'),
     __param(2, (0, common_1.Inject)(redis_module_1.REDIS_CLIENT)),
-    __metadata("design:paramtypes", [monitoring_service_1.MonitoringService,
-        config_1.ConfigService,
-        redis_module_1.RedisClientHost])
+    __metadata("design:paramtypes", [monitoring_service_1.MonitoringService, typeof (_a = typeof config_1.ConfigService !== "undefined" && config_1.ConfigService) === "function" ? _a : Object, redis_module_1.RedisClientHost])
 ], MonitoringController);
 //# sourceMappingURL=monitoring.controller.js.map

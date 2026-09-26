@@ -59,7 +59,18 @@ export class ConnectionsService {
     state: string | undefined,
     error?: string,
   ): Promise<string> {
-    const frontend = (this.configService.get<AppConfig>('app') as AppConfig).frontendUrl;
+    const app = this.configService.get<AppConfig>('app') as AppConfig;
+    const hosted = app.nodeEnv === 'production' || Boolean(process.env.RENDER);
+    const forward = this.localForwardUrl(app.oauthCallbackForward);
+    if (hosted && forward && (code || error)) {
+      const params = new URLSearchParams();
+      if (code) params.set('code', code);
+      if (state) params.set('state', state);
+      if (error) params.set('error', error);
+      return `${forward}/api/connections/${platform}/callback?${params.toString()}`;
+    }
+
+    const frontend = app.frontendUrl;
     const dest = platform === 'ebay' ? '/connections/ebay' : '/connections/aliexpress';
     if (error) return `${frontend}${dest}?error=${encodeURIComponent(error)}`;
     if (!code || !state) return `${frontend}${dest}?error=${encodeURIComponent('Missing authorization code')}`;
@@ -75,6 +86,17 @@ export class ConnectionsService {
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Authorization failed';
       return `${frontend}${dest}?error=${encodeURIComponent(message)}`;
+    }
+  }
+
+  private localForwardUrl(value: string): string | null {
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+      return local ? url.origin : null;
+    } catch {
+      return null;
     }
   }
 

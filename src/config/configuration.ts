@@ -4,6 +4,7 @@ export interface AppConfig {
   apiPrefix: string;
   corsOrigin: string;
   frontendUrl: string;
+  oauthCallbackForward: string;
   logLevel: string;
 }
 
@@ -57,8 +58,10 @@ export interface Configuration {
   openai: OpenAIConfig;
 }
 
-const str = (value: string | undefined, fallback = ''): string =>
-  value === undefined || value === '' ? fallback : value;
+const str = (value: string | undefined, fallback = ''): string => {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === '' ? fallback : trimmed;
+};
 
 const num = (value: string | undefined, fallback: number): number => {
   const parsed = Number(value);
@@ -124,6 +127,10 @@ export const configuration = (): Configuration => {
       apiPrefix: str(process.env.API_PREFIX, 'api'),
       corsOrigin: str(process.env.CORS_ORIGIN, 'http://localhost:5173'),
       frontendUrl: str(process.env.FRONTEND_URL, str(process.env.CORS_ORIGIN, 'http://localhost:5173').split(',')[0]),
+      oauthCallbackForward: str(
+        process.env.OAUTH_CALLBACK_FORWARD,
+        process.env.RENDER ? 'http://localhost:3000' : '',
+      ),
       logLevel: str(process.env.LOG_LEVEL, 'debug'),
     },
     auth0: {

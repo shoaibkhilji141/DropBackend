@@ -56,7 +56,20 @@ let ConnectionsService = class ConnectionsService {
         return { url: this.aliExpress.authorizationUrl(state) };
     }
     async handleCallback(platform, code, state, error) {
-        const frontend = this.configService.get('app').frontendUrl;
+        const app = this.configService.get('app');
+        const hosted = app.nodeEnv === 'production' || Boolean(process.env.RENDER);
+        const forward = this.localForwardUrl(app.oauthCallbackForward);
+        if (hosted && forward && (code || error)) {
+            const params = new URLSearchParams();
+            if (code)
+                params.set('code', code);
+            if (state)
+                params.set('state', state);
+            if (error)
+                params.set('error', error);
+            return `${forward}/api/connections/${platform}/callback?${params.toString()}`;
+        }
+        const frontend = app.frontendUrl;
         const dest = platform === 'ebay' ? '/connections/ebay' : '/connections/aliexpress';
         if (error)
             return `${frontend}${dest}?error=${encodeURIComponent(error)}`;
@@ -75,6 +88,18 @@ let ConnectionsService = class ConnectionsService {
         catch (caught) {
             const message = caught instanceof Error ? caught.message : 'Authorization failed';
             return `${frontend}${dest}?error=${encodeURIComponent(message)}`;
+        }
+    }
+    localForwardUrl(value) {
+        if (!value)
+            return null;
+        try {
+            const url = new URL(value);
+            const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+            return local ? url.origin : null;
+        }
+        catch {
+            return null;
         }
     }
     async disconnect(platform, identity) {

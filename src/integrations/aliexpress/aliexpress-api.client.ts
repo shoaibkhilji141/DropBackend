@@ -12,8 +12,9 @@ import {
 } from './aliexpress.types';
 
 const GATEWAY = 'https://api-sg.aliexpress.com/sync';
-const AUTHORIZE = 'https://oauth.aliexpress.com/authorize';
+const AUTHORIZE = 'https://api-sg.aliexpress.com/oauth/authorize';
 const TOKEN = 'https://oauth.aliexpress.com/token';
+const REST = 'https://api-sg.aliexpress.com/rest';
 
 interface AliExpressCallResult {
   method: string;
@@ -36,16 +37,60 @@ export class AliExpressApiClient {
     const config = this.config();
     const params = new URLSearchParams({
       response_type: 'code',
+      force_auth: 'true',
       client_id: config.appKey,
       redirect_uri: config.callbackUrl,
       state,
-      view: 'web',
-      sp: 'ae',
     });
     return `${AUTHORIZE}?${params.toString()}`;
   }
 
   async exchangeCode(code: string): Promise<OAuthTokenSet & { userNick?: string; userId?: string }> {
+    try {
+      return await this.exchangeCodeIop(code);
+    } catch {
+      return this.exchangeCodeClassic(code);
+    }
+  }
+
+  private async exchangeCodeIop(
+    code: string,
+  ): Promise<OAuthTokenSet & { userNick?: string; userId?: string }> {
+    const config = this.config();
+    const params: Record<string, string> = {
+      method: '/auth/token/create',
+      app_key: config.appKey,
+      timestamp: this.gmt8Timestamp(),
+      sign_method: 'sha256',
+      format: 'json',
+      v: '2.0',
+      code,
+    };
+    params.sign = this.sign(params, config.appSecret);
+    const response = await fetch(REST, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      body: new URLSearchParams(params).toString(),
+    });
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const accessToken = String(payload.access_token ?? '');
+    if (!accessToken) {
+      throw new Error(this.readError(payload) || 'AliExpress IOP token request failed');
+    }
+    const expireTime = Number(payload.expire_time ?? payload.expires_in ?? 0);
+    return {
+      accessToken,
+      refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined,
+      expiresAt:
+        expireTime > 1_000_000_000 ? new Date(expireTime) : expireTime > 0 ? new Date(Date.now() + expireTime * 1000) : undefined,
+      userNick: typeof payload.user_nick === 'string' ? payload.user_nick : undefined,
+      userId: payload.user_id != null ? String(payload.user_id) : undefined,
+    };
+  }
+
+  private async exchangeCodeClassic(
+    code: string,
+  ): Promise<OAuthTokenSet & { userNick?: string; userId?: string }> {
     const config = this.config();
     const body = new URLSearchParams({
       grant_type: 'authorization_code',

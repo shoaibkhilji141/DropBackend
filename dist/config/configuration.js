@@ -2,7 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.configuration = void 0;
 exports.isRedisEnabled = isRedisEnabled;
-const str = (value, fallback = '') => value === undefined || value === '' ? fallback : value;
+const str = (value, fallback = '') => {
+    const trimmed = value?.trim();
+    return trimmed === undefined || trimmed === '' ? fallback : trimmed;
+};
 const num = (value, fallback) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -53,6 +56,7 @@ const configuration = () => {
             apiPrefix: str(process.env.API_PREFIX, 'api'),
             corsOrigin: str(process.env.CORS_ORIGIN, 'http://localhost:5173'),
             frontendUrl: str(process.env.FRONTEND_URL, str(process.env.CORS_ORIGIN, 'http://localhost:5173').split(',')[0]),
+            oauthCallbackForward: str(process.env.OAUTH_CALLBACK_FORWARD, process.env.RENDER ? 'http://localhost:3000' : ''),
             logLevel: str(process.env.LOG_LEVEL, 'debug'),
         },
         auth0: {

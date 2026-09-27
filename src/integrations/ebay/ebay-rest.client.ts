@@ -48,9 +48,10 @@ export interface EbayMarketplaceItem {
   condition: string | null;
   categories: string[];
   soldCount: number;
-  soldLast7Days: number;
-  soldLast30Days: number;
+  soldLast7Days: number | null;
+  soldLast30Days: number | null;
   listingAgeDays: number | null;
+  purchaseHistoryUrl: string | null;
   endedAt?: Date;
 }
 
@@ -222,9 +223,10 @@ export class EbayRestClient {
             .map((category) => category.categoryName)
             .filter((name): name is string => Boolean(name)),
           soldCount: 0,
-          soldLast7Days: 0,
-          soldLast30Days: 0,
+          soldLast7Days: this.windowSold(0, age, 7),
+          soldLast30Days: this.windowSold(0, age, 30),
           listingAgeDays: age,
+          purchaseHistoryUrl: this.purchaseHistoryUrl(itemId),
         };
       })
       .filter((item): item is EbayMarketplaceItem => item !== null);
@@ -348,9 +350,10 @@ export class EbayRestClient {
         ? [String(this.firstFindingValue(category?.categoryName))]
         : [],
       soldCount: Number.isFinite(sold) ? sold : 0,
-      soldLast7Days: 0,
-      soldLast30Days: 0,
+      soldLast7Days: this.windowSold(Number.isFinite(sold) ? sold : 0, age, 7),
+      soldLast30Days: this.windowSold(Number.isFinite(sold) ? sold : 0, age, 30),
       listingAgeDays: age,
+      purchaseHistoryUrl: this.purchaseHistoryUrl(itemId),
       endedAt: end,
     };
   }
@@ -380,8 +383,9 @@ export class EbayRestClient {
         ...item,
         soldCount: extra.sold,
         listingAgeDays: age,
-        soldLast7Days: age != null && age <= 7 ? extra.sold : item.soldLast7Days,
-        soldLast30Days: age != null && age <= 30 ? extra.sold : item.soldLast30Days,
+        soldLast7Days: this.windowSold(extra.sold, age, 7),
+        soldLast30Days: this.windowSold(extra.sold, age, 30),
+        purchaseHistoryUrl: this.purchaseHistoryUrl(item.itemId),
       };
     });
   }
@@ -490,6 +494,27 @@ export class EbayRestClient {
       .filter((row): row is { itemId: string; sold: number; start?: Date } => row !== null);
   }
 
+  private windowSold(sold: number, age: number | null, days: number): number | null {
+    if (age == null) return null;
+    return age <= days ? sold : null;
+  }
+
+  private purchaseHistoryUrl(itemId: string): string | null {
+    const legacy = this.numericItemId(itemId);
+    if (!legacy) return null;
+    const hosts: Record<string, string> = {
+      EBAY_GB: 'https://www.ebay.co.uk',
+      EBAY_DE: 'https://www.ebay.de',
+      EBAY_FR: 'https://www.ebay.fr',
+      EBAY_IT: 'https://www.ebay.it',
+      EBAY_ES: 'https://www.ebay.es',
+      EBAY_AU: 'https://www.ebay.com.au',
+      EBAY_CA: 'https://www.ebay.ca',
+    };
+    const host = hosts[this.config().marketplaceId] ?? 'https://www.ebay.com';
+    return `${host}/bin/purchaseHistory?item=${legacy}`;
+  }
+
   private numericItemId(itemId: string): string {
     const browse = itemId.match(/v1\|(\d+)\|/);
     if (browse) return browse[1];
@@ -502,9 +527,11 @@ export class EbayRestClient {
       if (sort === 'priceAsc') return a.price - b.price;
       if (sort === 'priceDesc') return b.price - a.price;
       if (sort === 'newest') return (a.listingAgeDays ?? 999) - (b.listingAgeDays ?? 999);
-      if (sort === 'sold7') return b.soldLast7Days - a.soldLast7Days || b.soldCount - a.soldCount;
-      if (sort === 'sold30') return b.soldLast30Days - a.soldLast30Days || b.soldCount - a.soldCount;
-      return b.soldCount - a.soldCount || b.soldLast30Days - a.soldLast30Days;
+      if (sort === 'sold7')
+        return (b.soldLast7Days ?? -1) - (a.soldLast7Days ?? -1) || b.soldCount - a.soldCount;
+      if (sort === 'sold30')
+        return (b.soldLast30Days ?? -1) - (a.soldLast30Days ?? -1) || b.soldCount - a.soldCount;
+      return b.soldCount - a.soldCount || (b.soldLast30Days ?? -1) - (a.soldLast30Days ?? -1);
     });
     return copy;
   }

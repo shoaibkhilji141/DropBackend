@@ -270,9 +270,10 @@ export class AliExpressApiClient {
 
   async search(accessToken: string, query: SupplierSearchQuery): Promise<SupplierSearchResult> {
     const keyword = query.search?.trim();
+    const sortByOrders = !query.sort || query.sort === 'ordersDesc';
     if (!keyword) {
       const recommended = await this.recommend(accessToken);
-      if (recommended.length > 0) {
+      if (recommended.length > 0 && recommended.some((item) => item.orders > 0)) {
         return { items: recommended, facets: { categories: [], suppliers: [] } };
       }
     }
@@ -283,6 +284,7 @@ export class AliExpressApiClient {
         local: 'en_GB',
         countryCode: 'GB',
         currency: 'GBP',
+        sortBy: this.mapSort(query.sort ?? 'ordersDesc'),
         pageIndex: 1,
         pageSize: 40,
       },
@@ -291,7 +293,7 @@ export class AliExpressApiClient {
         local: 'en_GB',
         countryCode: 'GB',
         currency: 'GBP',
-        sortBy: this.mapSort(query.sort),
+        sortBy: this.mapSort(query.sort ?? 'ordersDesc'),
         pageIndex: 1,
         pageSize: 40,
       },
@@ -304,6 +306,7 @@ export class AliExpressApiClient {
         .map((row) => this.mapSearchRow(row))
         .filter((item): item is SupplierProduct => item !== null);
       if (items.length > 0) {
+        if (sortByOrders) items.sort((a, b) => b.orders - a.orders);
         return { items, facets: { categories: [], suppliers: [] } };
       }
       if (!result.ok) lastError = result.error || lastError;
@@ -519,7 +522,7 @@ export class AliExpressApiClient {
       const items = this.extractList(result.payload)
         .map((row) => this.mapSearchRow(row))
         .filter((item): item is SupplierProduct => item !== null);
-      if (items.length > 0) return items;
+      if (items.length > 0) return [...items].sort((a, b) => b.orders - a.orders);
     }
     return [];
   }

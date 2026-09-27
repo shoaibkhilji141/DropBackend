@@ -134,20 +134,9 @@ export class EbayRestClient {
 
   async searchMarketplace(query: string | EbayResearchQuery = {}): Promise<EbayMarketplaceItem[]> {
     const filters: EbayResearchQuery = typeof query === 'string' ? { q: query } : query;
-    const limit = Math.min(Math.max(filters.limit ?? 100, 1), 100);
-    let items: EbayMarketplaceItem[] = [];
-    try {
-      items = await this.searchFinding(filters, limit);
-    } catch (error) {
-      this.logger.warn(
-        `Finding search failed, using Browse: ${error instanceof Error ? error.message : error}`,
-      );
-    }
-    if (items.length === 0) {
-      items = await this.searchBrowse(filters, Math.min(limit, 50));
-    }
-    items = await this.enrichListingSold(items);
-    return this.sortResearchItems(items, filters.sort);
+    const limit = Math.min(Math.max(filters.limit ?? 80, 1), 80);
+    const items = await this.searchBrowse(filters, Math.min(limit, 50));
+    return this.sortResearchItems(await this.enrichListingSold(items), filters.sort);
   }
 
   private async searchFinding(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
@@ -209,6 +198,8 @@ export class EbayRestClient {
         seller?: { username?: string };
         condition?: string;
         categories?: { categoryName?: string }[];
+        itemCreationDate?: string;
+        itemOriginDate?: string;
       }>;
     }>('GET', `${this.hosts().api}/buy/browse/v1/item_summary/search?${params.toString()}`, token);
 
@@ -216,6 +207,8 @@ export class EbayRestClient {
       .map((item): EbayMarketplaceItem | null => {
         const itemId = String(item.itemId ?? '');
         if (!itemId) return null;
+        const start = this.parseFindingDate(item.itemCreationDate ?? item.itemOriginDate);
+        const age = start ? Math.max(0, Math.round((Date.now() - start.getTime()) / 86_400_000)) : null;
         return {
           itemId,
           title: String(item.title ?? 'eBay item'),
@@ -231,7 +224,7 @@ export class EbayRestClient {
           soldCount: 0,
           soldLast7Days: 0,
           soldLast30Days: 0,
-          listingAgeDays: null,
+          listingAgeDays: age,
         };
       })
       .filter((item): item is EbayMarketplaceItem => item !== null);
@@ -364,95 +357,52 @@ export class EbayRestClient {
 
   private async enrichListingSold(items: EbayMarketplaceItem[]): Promise<EbayMarketplaceItem[]> {
     const details = new Map<string, { sold: number; start?: Date }>();
-    const restIds = [
-      ...new Set(items.map((item) => (item.itemId.startsWith('v1|') ? item.itemId : '')).filter(Boolean)),
-    ];
-    const legacyIds = [
-      ...new Set(
-        items
-          .filter((item) => !item.itemId.startsWith('v1|'))
-          .map((item) => this.numericItemId(item.itemId))
-          .filter(Boolean),
-      ),
-    ];
-
-    for (let offset = 0; offset < restIds.length; offset += 20) {
-      try {
-        for (const row of await this.browseGetItems(restIds.slice(offset, offset + 20))) {
-          details.set(row.itemId, row);
-          if (row.legacyId) details.set(row.legacyId, row);
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Browse getItems failed: ${error instanceof Error ? error.message : error}`,
-        );
-      }
-    }
-
-    const constructed = legacyIds.map((id) => `v1|${id}|0`);
-    for (let offset = 0; offset < constructed.length; offset += 20) {
-      try {
-        for (const row of await this.browseGetItems(constructed.slice(offset, offset + 20))) {
-          details.set(row.itemId, row);
-          if (row.legacyId) details.set(row.legacyId, row);
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Browse getItems (legacy) failed: ${error instanceof Error ? error.message : error}`,
-        );
-      }
-    }
-
-    const missingLegacy = legacyIds.filter((id) => !details.has(id) && !details.has(`v1|${id}|0`));
-    for (const legacyId of missingLegacy.slice(0, 20)) {
-      try {
-        const row = await this.browseGetItemByLegacyId(legacyId);
+    const ids = items.map((item) => item.itemId).filter((id) => id.startsWith('v1|'));
+    const concurrency = 6;
+    for (let offset = 0; offset < Math.min(ids.length, 36); offset += concurrency) {
+      const batch = ids.slice(offset, offset + concurrency);
+      const rows = await Promise.all(batch.map((id) => this.browseGetItem(id)));
+      for (const row of rows) {
         if (!row) continue;
-        details.set(legacyId, row);
         details.set(row.itemId, row);
         if (row.legacyId) details.set(row.legacyId, row);
-      } catch (error) {
-        this.logger.warn(
-          `Browse getItemByLegacyId ${legacyId}: ${error instanceof Error ? error.message : error}`,
-        );
       }
     }
-
-    const stillMissing = [
-      ...new Set(items.map((item) => this.numericItemId(item.itemId)).filter((id) => id && !details.has(id))),
-    ];
-    for (let offset = 0; offset < stillMissing.length; offset += 20) {
-      try {
-        for (const row of await this.shoppingSold(stillMissing.slice(offset, offset + 20))) {
-          if (!details.has(row.itemId)) details.set(row.itemId, row);
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Shopping QuantitySold fallback failed: ${error instanceof Error ? error.message : error}`,
-        );
-      }
-    }
-
     if (details.size === 0) return items;
 
     return items.map((item) => {
-      const extra =
-        details.get(item.itemId) ??
-        details.get(this.numericItemId(item.itemId)) ??
-        details.get(`v1|${this.numericItemId(item.itemId)}|0`);
+      const extra = details.get(item.itemId) ?? details.get(this.numericItemId(item.itemId));
       if (!extra) return item;
       const age = extra.start
         ? Math.max(0, Math.round((Date.now() - extra.start.getTime()) / 86_400_000))
         : item.listingAgeDays;
-      const sold = extra.sold > 0 ? extra.sold : item.soldCount;
       return {
         ...item,
-        soldCount: sold,
+        soldCount: extra.sold,
         listingAgeDays: age,
-        soldLast7Days: age != null && age <= 7 ? sold : item.soldLast7Days,
-        soldLast30Days: age != null && age <= 30 ? sold : item.soldLast30Days,
+        soldLast7Days: age != null && age <= 7 ? extra.sold : item.soldLast7Days,
+        soldLast30Days: age != null && age <= 30 ? extra.sold : item.soldLast30Days,
       };
     });
+  }
+
+  private async browseGetItem(
+    itemId: string,
+  ): Promise<{ itemId: string; legacyId?: string; sold: number; start?: Date } | null> {
+    try {
+      const token = await this.applicationToken();
+      const payload = await this.request<BrowseItemPayload>(
+        'GET',
+        `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`,
+        token,
+      );
+      return this.mapBrowseSold(payload);
+    } catch (error) {
+      this.logger.warn(
+        `Browse getItem ${itemId}: ${error instanceof Error ? error.message : error}`,
+      );
+      return null;
+    }
   }
 
   private async browseGetItems(

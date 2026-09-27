@@ -290,6 +290,14 @@ let ProductsService = class ProductsService {
                 return [...items].sort((a, b) => a.estimate.breakdown.sellPrice - b.estimate.breakdown.sellPrice);
             case 'sellPriceDesc':
                 return [...items].sort((a, b) => b.estimate.breakdown.sellPrice - a.estimate.breakdown.sellPrice);
+            case 'ordersDesc':
+                return [...items].sort((a, b) => b.orders - a.orders);
+            case 'ratingDesc':
+                return [...items].sort((a, b) => b.rating - a.rating);
+            case 'costAsc':
+                return [...items].sort((a, b) => a.costPrice - b.costPrice);
+            case 'costDesc':
+                return [...items].sort((a, b) => b.costPrice - a.costPrice);
             default:
                 return items;
         }

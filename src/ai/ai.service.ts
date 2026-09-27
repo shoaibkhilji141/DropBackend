@@ -1,13 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AIRequest, AIRequestType, AIStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { AliExpressApiProvider } from '../integrations/aliexpress/aliexpress-api.provider';
+import { SupplierProduct } from '../integrations/aliexpress/aliexpress.types';
 import { OpenAIService } from '../integrations/openai/openai.service';
+import { ProfitService } from '../profit/profit.service';
 import { UsersService } from '../users/users.service';
 import {
   AiListResultDto,
   AiStatusDto,
   AiTextResultDto,
   GenerateAiContentDto,
+  ListingCopyResultDto,
 } from './dto/ai.dto';
 
 const SELLER_VOICE =
@@ -19,6 +23,8 @@ export class AiService {
     private readonly openai: OpenAIService,
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
+    private readonly aliexpress: AliExpressApiProvider,
+    private readonly profit: ProfitService,
   ) {}
 
   status(): AiStatusDto {
@@ -67,12 +73,115 @@ export class AiService {
     });
   }
 
+  async generateFromUrl(url: string): Promise<ListingCopyResultDto> {
+    const externalId = this.productIdFromUrl(url);
+    if (!externalId) {
+      throw new BadRequestException(
+        'Paste a full AliExpress product link, for example https://www.aliexpress.com/item/1005001234567890.html',
+      );
+    }
+    if (!(await this.aliexpress.hasLiveSession())) {
+      throw new BadRequestException('Connect AliExpress before generating listing copy from a product link.');
+    }
+
+    const product = await this.aliexpress.getByExternalId(externalId);
+    if (!product) {
+      throw new NotFoundException(`AliExpress product ${externalId} was not found.`);
+    }
+
+    const specs = (product.specs ?? []).map((spec) => `${spec.name}: ${spec.value}`);
+    const variantLines = product.variants.slice(0, 8).map((variant) => variant.attributes || variant.name);
+    const plainDescription = this.plainText(product.description).slice(0, 3500);
+    const dto: GenerateAiContentDto = {
+      productTitle: product.title,
+      description: plainDescription,
+      category: product.category,
+      keywords: specs.slice(0, 8),
+      tone: 'Sales',
+    };
+
+    const result = await this.runText(AIRequestType.TITLE, dto, {
+      system: `${SELLER_VOICE} Return JSON {"title":"...","description":"...","specs":["Name: value"],"keywords":["..."],"highlights":["..."]}. title is a ready-to-paste eBay title of at most 80 characters that leads with what the buyer is searching for, then the main benefit or spec. It should be specific enough to win the click and the sale. No ALL CAPS, no keyword stuffing, no quotes. description is plain text: a short opening that sells the outcome, then a feature bullet list, then a short shipping note that does not invent delivery times. specs are factual Name: value lines taken only from the source. keywords are 8 to 12 search phrases. highlights are 4 to 6 lines under 90 characters.`,
+      user: [
+        'Write eBay listing copy a seller can paste without editing.',
+        `Source title: ${product.title}`,
+        `Category: ${product.category}`,
+        `Supplier price: ${product.costPrice} ${product.currency}`,
+        `Orders on AliExpress: ${product.orders}`,
+        `Rating: ${product.rating} (${product.reviews} reviews)`,
+        specs.length ? `Source specs:\n${specs.join('\n')}` : 'Source specs: none provided',
+        variantLines.length ? `Variants: ${variantLines.join('; ')}` : '',
+        plainDescription ? `Source description:\n${plainDescription}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      extract: (payload) => JSON.stringify(payload),
+    });
+
+    const payload = this.openai.parseJsonObject(result.content);
+    const title = this.openai.requireString(payload, 'title').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const description = this.openai.requireString(payload, 'description');
+    const suggested = this.profit.suggestSellPrice(product.costPrice, product.shippingCost);
+
+    return {
+      requestId: result.requestId,
+      model: result.model,
+      tokensUsed: result.tokensUsed,
+      title,
+      description,
+      specs: this.stringList(payload, 'specs').slice(0, 16),
+      keywords: this.stringList(payload, 'keywords').slice(0, 16),
+      highlights: this.stringList(payload, 'highlights').slice(0, 8),
+      product: this.copyProduct(product, suggested),
+    };
+  }
+
   generateHighlights(dto: GenerateAiContentDto): Promise<AiListResultDto> {
     return this.runList(AIRequestType.HIGHLIGHTS, dto, {
       system: `${SELLER_VOICE} Return JSON {"highlights":["..."]}. Provide 4 to 6 short product highlights, each under 90 characters.`,
       user: this.sourceBlock(dto, 'Generate short product highlights for the listing.'),
       extract: (payload) => this.openai.requireStringArray(payload, 'highlights').slice(0, 8),
     });
+  }
+
+  private productIdFromUrl(input: string): string | null {
+    const trimmed = input.trim();
+    if (/^\d{6,20}$/.test(trimmed)) return trimmed;
+    const item = trimmed.match(/\/item\/(\d{6,20})(?:\.html)?/i);
+    if (item) return item[1];
+    const query = trimmed.match(/[?&](?:productId|itemId|product_id)=(\d{6,20})/i);
+    return query?.[1] ?? null;
+  }
+
+  private plainText(value: string): string {
+    return value
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private stringList(payload: Record<string, unknown>, key: string): string[] {
+    const value = payload[key];
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  }
+
+  private copyProduct(product: SupplierProduct, suggestedSellPrice: number): ListingCopyResultDto['product'] {
+    return {
+      externalId: product.externalId,
+      title: product.title,
+      images: product.images,
+      sourceUrl: product.sourceUrl,
+      costPrice: product.costPrice,
+      currency: product.currency,
+      category: product.category,
+      suggestedSellPrice,
+      specs: product.specs ?? [],
+    };
   }
 
   private sourceBlock(dto: GenerateAiContentDto, task: string): string {

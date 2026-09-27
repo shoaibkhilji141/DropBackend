@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AccountsModule } from '../integrations/accounts/accounts.module';
 import { AliExpressModule } from '../integrations/aliexpress/aliexpress.module';
 import { ProfitModule } from '../profit/profit.module';
 import { UsersModule } from '../users/users.module';
@@ -7,7 +8,7 @@ import { ProductsService } from './products.service';
 import { ResearchController } from './research.controller';
 
 @Module({
-  imports: [AliExpressModule, UsersModule, ProfitModule],
+  imports: [AliExpressModule, AccountsModule, UsersModule, ProfitModule],
   controllers: [ProductsController, ResearchController],
   providers: [ProductsService],
   exports: [ProductsService],

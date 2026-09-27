@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Listing, ListingStatus, Prisma } from '@prisma/client';
+import { liveListingWhere } from '../common/demo-data';
 import { parseStringArray, stringifyStringArray } from '../common/json';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EbayService } from '../integrations/ebay/ebay.service';
@@ -21,9 +22,12 @@ export class ListingsService {
     private readonly users: UsersService,
   ) {}
 
-  async findAll(query: ListListingsQueryDto): Promise<ListingView[]> {
+  async findAll(query: ListListingsQueryDto, identity?: AuthenticatedUser): Promise<ListingView[]> {
+    const user = await this.users.findCurrent(identity);
+    const live = await this.ebay.isConnected(user.id);
     const listings = await this.prisma.listing.findMany({
       where: {
+        ...(live ? liveListingWhere() : {}),
         status: query.status,
         ...(query.search ? { title: { contains: query.search } } : {}),
       },
@@ -186,6 +190,8 @@ export class ListingsService {
       sku: listing.sku,
       price: listing.price,
       quantity: listing.quantity,
+      soldCount: listing.soldCount,
+      ebayUrl: this.ebay.itemUrl(listing.externalId, listing.itemUrl),
       shippingMethod: listing.shippingMethod ?? listing.product?.shippingMethod ?? null,
       shippingCost: listing.shippingCost || listing.product?.shippingCost || 0,
       shippingEtaDays: listing.shippingEtaDays ?? listing.product?.shippingEtaDays ?? null,
@@ -205,6 +211,7 @@ export class ListingsService {
             images: productImages.length > 0 ? productImages : listing.product.imageUrl ? [listing.product.imageUrl] : [],
             costPrice: listing.product.costPrice,
             shippingCost: listing.product.shippingCost,
+            sourceUrl: listing.product.sourceUrl,
             category: listing.product.category,
             variants: listing.product.variants.map((variant) => ({
               id: variant.id,

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { LinkStatus, Platform } from '@prisma/client';
 import { AliExpressConfig } from '../../config/configuration';
 import { IntegrationAccountsService } from '../accounts/integration-accounts.service';
-import { MarketplaceConnectionView } from '../marketplace/marketplace.types';
+import { MarketplaceConnectionView, MarketplaceOrder } from '../marketplace/marketplace.types';
 import { AliExpressApiClient } from './aliexpress-api.client';
 import {
   SupplierProduct,
@@ -118,6 +118,11 @@ export class AliExpressApiProvider implements SupplierProductProvider {
   async search(query: SupplierSearchQuery): Promise<SupplierSearchResult> {
     const token = await this.requireToken();
     return this.client.search(token, query);
+  }
+
+  async listOrders(): Promise<{ orders: MarketplaceOrder[]; error?: string }> {
+    const token = await this.requireToken();
+    return this.client.listOrders(token);
   }
 
   async getByExternalId(externalId: string): Promise<SupplierProduct | null> {

@@ -13,8 +13,11 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
-  findAll(@Query() query: ListOrdersQueryDto): Promise<OrderView[]> {
-    return this.ordersService.findAll(query);
+  findAll(
+    @Query() query: ListOrdersQueryDto,
+    @CurrentUser() user?: AuthenticatedUser,
+  ): Promise<OrderView[]> {
+    return this.ordersService.findAll(query, user);
   }
 
   @Get('summary')

@@ -40,6 +40,7 @@ export interface SupplierProduct {
   shippingOptions: SupplierShippingOption[];
   supplier: SupplierRef;
   variants: SupplierProductVariant[];
+  specs?: { name: string; value: string }[];
 }
 
 export type SupplierSortOption =

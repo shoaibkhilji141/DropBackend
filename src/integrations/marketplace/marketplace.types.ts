@@ -33,6 +33,22 @@ export interface MarketplaceOrderItem {
   unitPrice: number;
   sku?: string;
   lineItemId?: string;
+  legacyItemId?: string;
+  imageUrl?: string;
+}
+
+export interface SellerListing {
+  itemId: string;
+  title: string;
+  description: string;
+  images: string[];
+  price: number;
+  currency: string;
+  quantity: number;
+  soldCount: number;
+  sku?: string;
+  category?: string;
+  itemUrl: string;
 }
 
 export interface MarketplaceOrder {

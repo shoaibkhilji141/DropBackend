@@ -147,6 +147,9 @@ model Listing {
   sku           String?
   price         Float         @default(0)
   quantity      Int           @default(0)
+  soldCount     Int           @default(0)
+  /// Public eBay view-item URL for this listing.
+  itemUrl       String?
   shippingMethod  String?
   shippingCost    Float       @default(0)
   shippingEtaDays Int?
@@ -173,6 +176,8 @@ model Order {
   id           String      @id @default(cuid())
   storeId      String?
   externalId   String?
+  /// EBAY for the seller shop, ALIEXPRESS for supplier purchase orders.
+  channel      String      @default("EBAY")
   buyerName    String?
   buyerEmail   String?
   buyerAddress String?

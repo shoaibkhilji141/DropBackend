@@ -7,6 +7,7 @@ import {
   MarketplaceOrder,
   MarketplacePublishResult,
   OAuthTokenSet,
+  SellerListing,
 } from '../marketplace/marketplace.types';
 
 interface EbayErrorBody {
@@ -200,6 +201,48 @@ export class EbayRestClient {
     );
   }
 
+  async listActiveListings(accessToken: string): Promise<SellerListing[]> {
+    const listings: SellerListing[] = [];
+    const pageSize = 100;
+
+    for (let page = 1; page <= 3; page += 1) {
+      const xml = await this.trading(
+        accessToken,
+        'GetMyeBaySelling',
+        `<?xml version="1.0" encoding="utf-8"?>
+<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <DetailLevel>ReturnAll</DetailLevel>
+  <ActiveList>
+    <Include>true</Include>
+    <Sort>QuantitySold</Sort>
+    <Pagination>
+      <EntriesPerPage>${pageSize}</EntriesPerPage>
+      <PageNumber>${page}</PageNumber>
+    </Pagination>
+  </ActiveList>
+</GetMyeBaySellingRequest>`,
+      );
+
+      const ack = this.xmlTag(xml, 'Ack');
+      if (ack === 'Failure') {
+        throw new Error(this.xmlTag(xml, 'LongMessage') || this.xmlTag(xml, 'ShortMessage') || 'eBay GetMyeBaySelling failed');
+      }
+
+      const items = this.xmlBlocks(xml, 'Item');
+      for (const block of items) {
+        const mapped = this.mapSellerItem(block);
+        if (mapped) listings.push(mapped);
+      }
+
+      const pages = Number(this.xmlTag(xml, 'TotalNumberOfPages') || '1');
+      if (!Number.isFinite(pages) || page >= pages || items.length === 0) break;
+    }
+
+    return listings;
+  }
+
   async listOrders(accessToken: string, since?: Date): Promise<MarketplaceOrder[]> {
     const from = (since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)).toISOString();
     const filter = `creationdate:[${from}..]`;
@@ -252,13 +295,18 @@ export class EbayRestClient {
       currency: pricing?.currency ?? this.currency(),
       totalAmount: Number(pricing?.value ?? 0),
       placedAt: new Date(String(order.creationDate ?? Date.now())),
-      items: lineItems.map((item) => ({
-        title: String(item.title ?? 'Item'),
-        quantity: Number(item.quantity ?? 1),
-        unitPrice: Number((item.lineItemCost as { value?: string } | undefined)?.value ?? 0),
-        sku: typeof item.sku === 'string' ? item.sku : undefined,
-        lineItemId: typeof item.lineItemId === 'string' ? item.lineItemId : undefined,
-      })),
+      items: lineItems.map((item) => {
+        const image = item.image as { imageUrl?: string } | undefined;
+        return {
+          title: String(item.title ?? 'Item'),
+          quantity: Number(item.quantity ?? 1),
+          unitPrice: Number((item.lineItemCost as { value?: string } | undefined)?.value ?? 0),
+          sku: typeof item.sku === 'string' ? item.sku : undefined,
+          lineItemId: typeof item.lineItemId === 'string' ? item.lineItemId : undefined,
+          legacyItemId: typeof item.legacyItemId === 'string' ? item.legacyItemId : undefined,
+          imageUrl: typeof image?.imageUrl === 'string' ? image.imageUrl : undefined,
+        };
+      }),
     };
   }
 
@@ -331,6 +379,114 @@ export class EbayRestClient {
     throw new Error(
       'Could not resolve an eBay categoryId via Commerce Taxonomy API. Set a more specific listing category or grant taxonomy access.',
     );
+  }
+
+  private async trading(accessToken: string, callName: string, body: string): Promise<string> {
+    const response = await fetch(`${this.hosts().api}/ws/api.dll`, {
+      method: 'POST',
+      headers: {
+        'X-EBAY-API-CALL-NAME': callName,
+        'X-EBAY-API-SITEID': this.siteId(),
+        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-IAF-TOKEN': accessToken,
+        'Content-Type': 'text/xml',
+      },
+      body,
+    });
+    const xml = await response.text();
+    if (!response.ok) {
+      throw new Error(this.xmlTag(xml, 'LongMessage') || `eBay ${callName} failed (${response.status})`);
+    }
+    return xml;
+  }
+
+  private siteId(): string {
+    const marketplace = this.config().marketplaceId;
+    const sites: Record<string, string> = {
+      EBAY_US: '0',
+      EBAY_GB: '3',
+      EBAY_AU: '15',
+      EBAY_DE: '77',
+      EBAY_FR: '71',
+      EBAY_IT: '101',
+      EBAY_ES: '186',
+      EBAY_CA: '2',
+    };
+    return sites[marketplace] ?? '0';
+  }
+
+  itemUrl(itemId: string, stored?: string | null): string | null {
+    if (stored) return stored;
+    if (!/^\d{8,}$/.test(itemId)) return null;
+    const hosts: Record<string, string> = {
+      EBAY_GB: 'https://www.ebay.co.uk',
+      EBAY_DE: 'https://www.ebay.de',
+      EBAY_FR: 'https://www.ebay.fr',
+      EBAY_IT: 'https://www.ebay.it',
+      EBAY_ES: 'https://www.ebay.es',
+      EBAY_AU: 'https://www.ebay.com.au',
+      EBAY_CA: 'https://www.ebay.ca',
+    };
+    const host = hosts[this.config().marketplaceId] ?? 'https://www.ebay.com';
+    return `${host}/itm/${itemId}`;
+  }
+
+  private mapSellerItem(block: string): SellerListing | null {
+    const itemId = this.xmlTag(block, 'ItemID');
+    const title = this.xmlTag(block, 'Title');
+    if (!itemId || !title) return null;
+
+    const priceMatch = block.match(/<CurrentPrice([^>]*)>([^<]+)<\/CurrentPrice>/);
+    const currency = priceMatch?.[1]?.match(/currencyID="([^"]+)"/)?.[1] ?? this.currency();
+    const price = Number(priceMatch?.[2] ?? this.xmlTag(block, 'CurrentPrice') ?? 0);
+    const pictures = [
+      ...this.xmlTags(block, 'PictureURL'),
+      ...this.xmlTags(block, 'GalleryURL'),
+    ].filter((url, index, all) => url.startsWith('http') && all.indexOf(url) === index);
+
+    return {
+      itemId,
+      title,
+      description: this.xmlTag(block, 'Description').slice(0, 8000),
+      images: pictures.slice(0, 12),
+      price: Number.isFinite(price) ? price : 0,
+      currency,
+      quantity: Number(this.xmlTag(block, 'QuantityAvailable') || this.xmlTag(block, 'Quantity') || 0),
+      soldCount: Number(this.xmlTag(block, 'QuantitySold') || 0),
+      sku: this.xmlTag(block, 'SKU') || undefined,
+      category: this.xmlTag(block, 'CategoryName') || undefined,
+      itemUrl: this.xmlTag(block, 'ViewItemURL') || this.itemUrl(itemId) || '',
+    };
+  }
+
+  private xmlBlocks(xml: string, tag: string): string[] {
+    const blocks: string[] = [];
+    const pattern = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g');
+    let match = pattern.exec(xml);
+    while (match) {
+      blocks.push(match[1]);
+      match = pattern.exec(xml);
+    }
+    return blocks;
+  }
+
+  private xmlTags(xml: string, tag: string): string[] {
+    return this.xmlBlocks(xml, tag).map((value) => this.decodeXml(value));
+  }
+
+  private xmlTag(xml: string, tag: string): string {
+    return this.xmlTags(xml, tag)[0] ?? '';
+  }
+
+  private decodeXml(value: string): string {
+    return value
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .trim();
   }
 
   private sanitizeSku(sku: string): string {

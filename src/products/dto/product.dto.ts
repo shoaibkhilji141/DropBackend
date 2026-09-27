@@ -153,6 +153,11 @@ export class UpdateProductDto {
   @IsString()
   description?: string;
 
+  @ApiPropertyOptional({ description: 'AliExpress product page used as the supply source' })
+  @IsOptional()
+  @IsString()
+  sourceUrl?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)

@@ -1,6 +1,8 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Product, ProductStatus } from '@prisma/client';
+import { LinkStatus, Platform, Product, ProductStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { liveProductWhere } from '../common/demo-data';
+import { IntegrationAccountsService } from '../integrations/accounts/integration-accounts.service';
 import {
   SUPPLIER_PRODUCT_PROVIDER,
   SupplierProduct,
@@ -50,6 +52,7 @@ export class ProductsService {
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
     private readonly profit: ProfitService,
+    private readonly accounts: IntegrationAccountsService,
     @Inject(SUPPLIER_PRODUCT_PROVIDER)
     private readonly supplier: SupplierProductProvider,
   ) {}
@@ -212,8 +215,16 @@ export class ProductsService {
   // -------------------------------------------------------------------------
 
   async findAll(query: ListProductsQueryDto): Promise<ProductView[]> {
+    const [ebay, aliexpress] = await Promise.all([
+      this.accounts.findConnected(Platform.EBAY),
+      this.accounts.findConnected(Platform.ALIEXPRESS),
+    ]);
+    const live =
+      (ebay?.status === LinkStatus.CONNECTED && !this.accounts.isExpired(ebay)) ||
+      (aliexpress?.status === LinkStatus.CONNECTED && !this.accounts.isExpired(aliexpress));
     const products = await this.prisma.product.findMany({
       where: {
+        ...(live ? liveProductWhere() : {}),
         status: query.status,
         ...(query.search ? { title: { contains: query.search } } : {}),
       },

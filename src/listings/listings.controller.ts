@@ -19,8 +19,11 @@ export class ListingsController {
   constructor(private readonly listingsService: ListingsService) {}
 
   @Get()
-  findAll(@Query() query: ListListingsQueryDto): Promise<ListingView[]> {
-    return this.listingsService.findAll(query);
+  findAll(
+    @Query() query: ListListingsQueryDto,
+    @CurrentUser() user?: AuthenticatedUser,
+  ): Promise<ListingView[]> {
+    return this.listingsService.findAll(query, user);
   }
 
   @Get(':id')

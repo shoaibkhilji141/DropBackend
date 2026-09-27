@@ -16,6 +16,8 @@ export interface ListingView {
   sku: string | null;
   price: number;
   quantity: number;
+  soldCount: number;
+  ebayUrl: string | null;
   shippingMethod: string | null;
   shippingCost: number;
   shippingEtaDays: number | null;
@@ -34,6 +36,7 @@ export interface ListingView {
     images: string[];
     costPrice: number;
     shippingCost: number;
+    sourceUrl: string | null;
     category: string | null;
     variants: ProductVariantView[];
   } | null;

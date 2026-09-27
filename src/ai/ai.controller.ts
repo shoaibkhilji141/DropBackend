@@ -7,6 +7,8 @@ import {
   AiStatusDto,
   AiTextResultDto,
   GenerateAiContentDto,
+  ListingCopyResultDto,
+  ListingFromUrlDto,
 } from './dto/ai.dto';
 
 @ApiTags('ai')
@@ -22,6 +24,11 @@ export class AiController {
   @Get('history')
   history(): Promise<AIRequest[]> {
     return this.aiService.history();
+  }
+
+  @Post('from-url')
+  fromUrl(@Body() dto: ListingFromUrlDto): Promise<ListingCopyResultDto> {
+    return this.aiService.generateFromUrl(dto.url);
   }
 
   @Post('title')

@@ -51,6 +51,42 @@ export class AiTextResultDto {
   @ApiProperty() tokensUsed: number;
 }
 
+export class ListingFromUrlDto {
+  @ApiProperty({ description: 'AliExpress product page URL or numeric product id' })
+  @IsString()
+  @MaxLength(500)
+  url: string;
+}
+
+export class ListingCopySpecDto {
+  @ApiProperty() name: string;
+  @ApiProperty() value: string;
+}
+
+export class ListingCopyProductDto {
+  @ApiProperty() externalId: string;
+  @ApiProperty() title: string;
+  @ApiProperty({ type: [String] }) images: string[];
+  @ApiProperty() sourceUrl: string;
+  @ApiProperty() costPrice: number;
+  @ApiProperty() currency: string;
+  @ApiProperty() category: string;
+  @ApiProperty() suggestedSellPrice: number;
+  @ApiProperty({ type: [ListingCopySpecDto] }) specs: ListingCopySpecDto[];
+}
+
+export class ListingCopyResultDto {
+  @ApiProperty() requestId: string;
+  @ApiProperty() model: string;
+  @ApiProperty() tokensUsed: number;
+  @ApiProperty() title: string;
+  @ApiProperty() description: string;
+  @ApiProperty({ type: [String] }) specs: string[];
+  @ApiProperty({ type: [String] }) keywords: string[];
+  @ApiProperty({ type: [String] }) highlights: string[];
+  @ApiProperty({ type: ListingCopyProductDto }) product: ListingCopyProductDto;
+}
+
 export class AiListResultDto {
   @ApiProperty() requestId: string;
   @ApiProperty() type: string;

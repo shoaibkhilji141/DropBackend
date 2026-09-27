@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "Listing" ADD COLUMN "soldCount" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "Listing" ADD COLUMN "itemUrl" TEXT;
+
+-- AlterTable
+ALTER TABLE "Order" ADD COLUMN "channel" TEXT NOT NULL DEFAULT 'EBAY';

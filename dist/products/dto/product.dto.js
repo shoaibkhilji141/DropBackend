@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateProductDto = exports.ListProductsQueryDto = exports.SearchSupplierProductsDto = exports.DERIVED_SORTS = void 0;
+exports.SearchEbayResearchDto = exports.UpdateProductDto = exports.ListProductsQueryDto = exports.SearchSupplierProductsDto = exports.DERIVED_SORTS = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const client_1 = require("@prisma/client");
@@ -41,7 +41,7 @@ class SearchSupplierProductsDto {
     page;
     pageSize;
     static _OPENAPI_METADATA_FACTORY() {
-        return { search: { required: false, type: () => String }, category: { required: false, type: () => String }, supplier: { required: false, type: () => String }, minCostPrice: { required: false, type: () => Number, minimum: 0 }, maxCostPrice: { required: false, type: () => Number, minimum: 0 }, minSellPrice: { required: false, type: () => Number, minimum: 0 }, maxSellPrice: { required: false, type: () => Number, minimum: 0 }, minProfit: { required: false, type: () => Number }, minMargin: { required: false, type: () => Number }, minRating: { required: false, type: () => Number, minimum: 0, maximum: 5 }, minOrders: { required: false, type: () => Number, minimum: 0 }, inStockOnly: { required: false, type: () => Boolean }, sort: { required: false, enum: ["relevance", "costAsc", "costDesc", "ratingDesc", "ordersDesc", "profitDesc", "marginDesc", "sellPriceAsc", "sellPriceDesc"], enum: [...SUPPLIER_SORTS, ...exports.DERIVED_SORTS] }, page: { required: false, type: () => Number, minimum: 1 }, pageSize: { required: false, type: () => Number, minimum: 1, maximum: 60 } };
+        return { search: { required: false, type: () => String }, category: { required: false, type: () => String }, supplier: { required: false, type: () => String }, minCostPrice: { required: false, type: () => Number, minimum: 0 }, maxCostPrice: { required: false, type: () => Number, minimum: 0 }, minSellPrice: { required: false, type: () => Number, minimum: 0 }, maxSellPrice: { required: false, type: () => Number, minimum: 0 }, minProfit: { required: false, type: () => Number }, minMargin: { required: false, type: () => Number }, minRating: { required: false, type: () => Number, minimum: 0, maximum: 5 }, minOrders: { required: false, type: () => Number, minimum: 0 }, inStockOnly: { required: false, type: () => Boolean }, sort: { required: false, enum: ["profitDesc", "marginDesc", "sellPriceAsc", "sellPriceDesc", "relevance", "costAsc", "costDesc", "ratingDesc", "ordersDesc"], enum: [...SUPPLIER_SORTS, ...exports.DERIVED_SORTS] }, page: { required: false, type: () => Number, minimum: 1 }, pageSize: { required: false, type: () => Number, minimum: 1, maximum: 60 } };
     }
 }
 exports.SearchSupplierProductsDto = SearchSupplierProductsDto;
@@ -249,4 +249,66 @@ __decorate([
     (0, class_validator_1.IsEnum)(client_1.ProductStatus),
     __metadata("design:type", String)
 ], UpdateProductDto.prototype, "status", void 0);
+class SearchEbayResearchDto {
+    q;
+    categoryId;
+    minPrice;
+    maxPrice;
+    condition;
+    sort;
+    limit;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { q: { required: false, type: () => String }, categoryId: { required: false, type: () => String }, minPrice: { required: false, type: () => Number, minimum: 0 }, maxPrice: { required: false, type: () => Number, minimum: 0 }, condition: { required: false, type: () => String, enum: ['NEW', 'USED', ''] }, sort: { required: false, type: () => String, enum: ['sold', 'sold7', 'sold30', 'priceAsc', 'priceDesc', 'newest'] }, limit: { required: false, type: () => Number, minimum: 1, maximum: 100 } };
+    }
+}
+exports.SearchEbayResearchDto = SearchEbayResearchDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SearchEbayResearchDto.prototype, "q", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'eBay category id' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SearchEbayResearchDto.prototype, "categoryId", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], SearchEbayResearchDto.prototype, "minPrice", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], SearchEbayResearchDto.prototype, "maxPrice", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsIn)(['NEW', 'USED', '']),
+    __metadata("design:type", String)
+], SearchEbayResearchDto.prototype, "condition", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsIn)(['sold', 'sold7', 'sold30', 'priceAsc', 'priceDesc', 'newest']),
+    __metadata("design:type", String)
+], SearchEbayResearchDto.prototype, "sort", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(100),
+    __metadata("design:type", Number)
+], SearchEbayResearchDto.prototype, "limit", void 0);
 //# sourceMappingURL=product.dto.js.map

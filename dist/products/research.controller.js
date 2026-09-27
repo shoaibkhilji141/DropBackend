@@ -16,12 +16,26 @@ exports.ResearchController = void 0;
 const openapi = require("@nestjs/swagger");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const ebay_service_1 = require("../integrations/ebay/ebay.service");
 const product_dto_1 = require("./dto/product.dto");
 const products_service_1 = require("./products.service");
 let ResearchController = class ResearchController {
     productsService;
-    constructor(productsService) {
+    ebay;
+    constructor(productsService, ebay) {
         this.productsService = productsService;
+        this.ebay = ebay;
+    }
+    searchEbay(query) {
+        return this.ebay.searchMarketplace({
+            q: query.q,
+            categoryId: query.categoryId,
+            minPrice: query.minPrice,
+            maxPrice: query.maxPrice,
+            condition: query.condition,
+            sort: query.sort,
+            limit: query.limit,
+        });
     }
     search(query) {
         return this.productsService.searchSupplier(query);
@@ -40,6 +54,15 @@ let ResearchController = class ResearchController {
     }
 };
 exports.ResearchController = ResearchController;
+__decorate([
+    (0, common_1.Get)('ebay'),
+    (0, swagger_1.ApiOperation)({ summary: 'Search live eBay UK listings for product research' }),
+    openapi.ApiResponse({ status: 200 }),
+    __param(0, (0, common_1.Query)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [product_dto_1.SearchEbayResearchDto]),
+    __metadata("design:returntype", void 0)
+], ResearchController.prototype, "searchEbay", null);
 __decorate([
     (0, common_1.Get)('products'),
     (0, swagger_1.ApiOperation)({
@@ -89,6 +112,7 @@ __decorate([
 exports.ResearchController = ResearchController = __decorate([
     (0, swagger_1.ApiTags)('product-research'),
     (0, common_1.Controller)('research'),
-    __metadata("design:paramtypes", [products_service_1.ProductsService])
+    __metadata("design:paramtypes", [products_service_1.ProductsService,
+        ebay_service_1.EbayService])
 ], ResearchController);
 //# sourceMappingURL=research.controller.js.map

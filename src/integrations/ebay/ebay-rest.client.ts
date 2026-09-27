@@ -27,9 +27,37 @@ const EBAY_SCOPES = [
   'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
 ];
 
+export interface EbayResearchQuery {
+  q?: string;
+  categoryId?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  condition?: string;
+  sort?: string;
+  limit?: number;
+}
+
+export interface EbayMarketplaceItem {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  price: number;
+  currency: string;
+  itemUrl: string;
+  seller: string | null;
+  condition: string | null;
+  categories: string[];
+  soldCount: number;
+  soldLast7Days: number;
+  soldLast30Days: number;
+  listingAgeDays: number | null;
+  endedAt?: Date;
+}
+
 @Injectable()
 export class EbayRestClient {
   private readonly logger = new Logger(EbayRestClient.name);
+  private appToken?: { accessToken: string; expiresAt: number };
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -80,6 +108,310 @@ export class EbayRestClient {
       refresh_token: refreshToken,
       scope: EBAY_SCOPES.join(' '),
     });
+  }
+
+  async applicationToken(): Promise<string> {
+    if (this.appToken && this.appToken.expiresAt > Date.now() + 60_000) {
+      return this.appToken.accessToken;
+    }
+    const tokens = await this.tokenRequest({
+      grant_type: 'client_credentials',
+      scope: 'https://api.ebay.com/oauth/api_scope',
+    });
+    this.appToken = {
+      accessToken: tokens.accessToken,
+      expiresAt: tokens.expiresAt?.getTime() ?? Date.now() + 7_000_000,
+    };
+    return tokens.accessToken;
+  }
+
+  async searchMarketplace(query: string | EbayResearchQuery = {}): Promise<EbayMarketplaceItem[]> {
+    const filters: EbayResearchQuery = typeof query === 'string' ? { q: query } : query;
+    const limit = Math.min(Math.max(filters.limit ?? 100, 1), 100);
+    try {
+      const items = await this.searchFinding(filters, limit);
+      if (items.length > 0) return this.sortResearchItems(items, filters.sort);
+    } catch (error) {
+      this.logger.warn(
+        `Finding search failed, using Browse: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    const browse = await this.searchBrowse(filters, Math.min(limit, 50));
+    return this.sortResearchItems(browse, filters.sort);
+  }
+
+  private async searchFinding(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
+    const active = await this.finding('findItemsAdvanced', filters, limit);
+    const completed = await this.findingCompleted(filters, 100);
+    const sold7 = new Map<string, number>();
+    const sold30 = new Map<string, number>();
+    const now = Date.now();
+    for (const sale of completed) {
+      const end = sale.endedAt?.getTime() ?? 0;
+      const qty = Math.max(sale.soldCount, 1);
+      const keys = [sale.itemId, this.titleKey(sale.title)].filter(Boolean);
+      if (end >= now - 30 * 24 * 60 * 60 * 1000) {
+        for (const key of keys) sold30.set(key, (sold30.get(key) ?? 0) + qty);
+      }
+      if (end >= now - 7 * 24 * 60 * 60 * 1000) {
+        for (const key of keys) sold7.set(key, (sold7.get(key) ?? 0) + qty);
+      }
+    }
+
+    return active.map((item) => {
+      const titleKey = this.titleKey(item.title);
+      const matched7 = sold7.get(item.itemId) ?? sold7.get(titleKey) ?? 0;
+      const matched30 = sold30.get(item.itemId) ?? sold30.get(titleKey) ?? 0;
+      const age = item.listingAgeDays;
+      const soldLast7Days = age != null && age <= 7 ? item.soldCount : matched7;
+      const soldLast30Days = age != null && age <= 30 ? item.soldCount : Math.max(matched30, matched7);
+      return { ...item, soldLast7Days, soldLast30Days };
+    });
+  }
+
+  private async searchBrowse(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
+    const token = await this.applicationToken();
+    const params = new URLSearchParams({
+      limit: String(limit),
+      fieldgroups: 'EXTENDED',
+    });
+    const trimmed = filters.q?.trim();
+    if (trimmed) params.set('q', trimmed);
+    else params.set('category_ids', filters.categoryId || '293');
+    if (filters.categoryId && trimmed) params.set('category_ids', filters.categoryId);
+    const filterParts: string[] = ['buyingOptions:{FIXED_PRICE}'];
+    if (filters.minPrice != null || filters.maxPrice != null) {
+      const min = filters.minPrice ?? 0;
+      const max = filters.maxPrice ?? 10_000;
+      filterParts.push(`price:[${min}..${max}]`, `priceCurrency:${this.currency()}`);
+    }
+    if (filters.condition === 'NEW') filterParts.push('conditions:{NEW}');
+    if (filters.condition === 'USED') filterParts.push('conditions:{USED}');
+    params.set('filter', filterParts.join(','));
+    const payload = await this.request<{
+      itemSummaries?: Array<{
+        itemId?: string;
+        title?: string;
+        image?: { imageUrl?: string };
+        thumbnailImages?: { imageUrl?: string }[];
+        price?: { value?: string; currency?: string };
+        itemWebUrl?: string;
+        seller?: { username?: string };
+        condition?: string;
+        categories?: { categoryName?: string }[];
+      }>;
+    }>('GET', `${this.hosts().api}/buy/browse/v1/item_summary/search?${params.toString()}`, token);
+
+    return (payload.itemSummaries ?? [])
+      .map((item): EbayMarketplaceItem | null => {
+        const itemId = String(item.itemId ?? '');
+        if (!itemId) return null;
+        return {
+          itemId,
+          title: String(item.title ?? 'eBay item'),
+          imageUrl: item.image?.imageUrl ?? item.thumbnailImages?.[0]?.imageUrl ?? null,
+          price: Number(item.price?.value ?? 0),
+          currency: item.price?.currency ?? this.currency(),
+          itemUrl: String(item.itemWebUrl ?? this.itemUrl(itemId.replace(/^v1\|/, '').split('|')[0]) ?? ''),
+          seller: item.seller?.username ?? null,
+          condition: item.condition ?? null,
+          categories: (item.categories ?? [])
+            .map((category) => category.categoryName)
+            .filter((name): name is string => Boolean(name)),
+          soldCount: 0,
+          soldLast7Days: 0,
+          soldLast30Days: 0,
+          listingAgeDays: null,
+        };
+      })
+      .filter((item): item is EbayMarketplaceItem => item !== null);
+  }
+
+  private async finding(
+    operation: 'findItemsAdvanced' | 'findCompletedItems',
+    filters: EbayResearchQuery,
+    limit: number,
+  ): Promise<EbayMarketplaceItem[]> {
+    const ebay = this.config();
+    const params = new URLSearchParams({
+      'OPERATION-NAME': operation,
+      'SERVICE-VERSION': '1.13.0',
+      'SECURITY-APPNAME': ebay.appId,
+      'RESPONSE-DATA-FORMAT': 'JSON',
+      'REST-PAYLOAD': 'true',
+      'GLOBAL-ID': this.findingGlobalId(),
+      'paginationInput.entriesPerPage': String(limit),
+      'paginationInput.pageNumber': '1',
+      'outputSelector(0)': 'SellerInfo',
+      'outputSelector(1)': 'PictureURLLarge',
+      'outputSelector(2)': 'PictureURLSuperSize',
+    });
+    const keywords = filters.q?.trim();
+    if (keywords) params.set('keywords', keywords);
+    if (filters.categoryId) params.set('categoryId', filters.categoryId);
+    if (!keywords && !filters.categoryId) params.set('categoryId', '293');
+
+    let filterIndex = 0;
+    const addFilter = (name: string, value: string) => {
+      params.set(`itemFilter(${filterIndex}).name`, name);
+      params.set(`itemFilter(${filterIndex}).value`, value);
+      filterIndex += 1;
+    };
+    addFilter('ListedIn', this.findingGlobalId());
+    addFilter('HideDuplicateItems', 'true');
+    if (filters.minPrice != null) addFilter('MinPrice', String(filters.minPrice));
+    if (filters.maxPrice != null) addFilter('MaxPrice', String(filters.maxPrice));
+    if (filters.condition === 'NEW') addFilter('Condition', 'New');
+    if (filters.condition === 'USED') addFilter('Condition', 'Used');
+    if (operation === 'findCompletedItems') {
+      addFilter('SoldItemsOnly', 'true');
+      const to = new Date();
+      const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      addFilter('EndTimeFrom', from.toISOString());
+      addFilter('EndTimeTo', to.toISOString());
+    }
+
+    const findingHost =
+      this.config().environment === 'sandbox'
+        ? 'https://svcs.sandbox.ebay.com'
+        : 'https://svcs.ebay.com';
+    const url = `${findingHost}/services/search/FindingService/v1?${params.toString()}`;
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const rootKey = operation === 'findCompletedItems' ? 'findCompletedItemsResponse' : 'findItemsAdvancedResponse';
+    const root = this.firstFinding(payload[rootKey]);
+    const ack = String(this.firstFindingValue(root?.ack) ?? '');
+    if (!response.ok || /failure/i.test(ack)) {
+      const errorBlock = this.firstFinding(this.firstFinding(root?.errorMessage)?.error);
+      const message =
+        this.firstFindingValue(errorBlock?.message) ||
+        this.firstFindingValue(errorBlock?.longMessage) ||
+        `eBay Finding ${operation} failed`;
+      throw new Error(message);
+    }
+    const search = this.firstFinding(root?.searchResult);
+    const rows = Array.isArray(search?.item) ? search.item : [];
+    return rows
+      .map((row) => this.mapFindingItem(row as Record<string, unknown>))
+      .filter((item): item is EbayMarketplaceItem => item !== null);
+  }
+
+  private async findingCompleted(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
+    try {
+      return await this.finding('findCompletedItems', filters, limit);
+    } catch (error) {
+      this.logger.warn(
+        `Completed-item search unavailable: ${error instanceof Error ? error.message : error}`,
+      );
+      return [];
+    }
+  }
+
+  private mapFindingItem(row: Record<string, unknown>): EbayMarketplaceItem | null {
+    const itemId = String(this.firstFindingValue(row.itemId) ?? '');
+    const title = String(this.firstFindingValue(row.title) ?? '');
+    if (!itemId || !title) return null;
+    const selling = this.firstFinding(row.sellingStatus);
+    const priceNode = this.firstFinding(selling?.currentPrice ?? selling?.convertedCurrentPrice);
+    const price = Number(priceNode?.__value__ ?? this.firstFindingValue(selling?.currentPrice) ?? 0);
+    const currency =
+      String(priceNode?.['@currencyId'] ?? '') || this.currency();
+    const listing = this.firstFinding(row.listingInfo);
+    const start = this.parseFindingDate(this.firstFindingValue(listing?.startTime));
+    const end = this.parseFindingDate(this.firstFindingValue(listing?.endTime));
+    const category = this.firstFinding(row.primaryCategory);
+    const seller = this.firstFinding(row.sellerInfo);
+    const condition = this.firstFinding(row.condition);
+    const picture =
+      this.firstFindingValue(row.pictureURLSuperSize) ??
+      this.firstFindingValue(row.pictureURLLarge) ??
+      this.firstFindingValue(row.galleryURL);
+    const sold = Number(this.firstFindingValue(selling?.quantitySold) ?? 0);
+    const age = start ? Math.max(0, Math.round((Date.now() - start.getTime()) / 86_400_000)) : null;
+    return {
+      itemId,
+      title,
+      imageUrl: picture ? String(picture) : null,
+      price: Number.isFinite(price) ? price : 0,
+      currency,
+      itemUrl: String(this.firstFindingValue(row.viewItemURL) ?? this.itemUrl(itemId) ?? ''),
+      seller: this.firstFindingValue(seller?.sellerUserName)
+        ? String(this.firstFindingValue(seller?.sellerUserName))
+        : null,
+      condition: this.firstFindingValue(condition?.conditionDisplayName)
+        ? String(this.firstFindingValue(condition?.conditionDisplayName))
+        : null,
+      categories: this.firstFindingValue(category?.categoryName)
+        ? [String(this.firstFindingValue(category?.categoryName))]
+        : [],
+      soldCount: Number.isFinite(sold) ? sold : 0,
+      soldLast7Days: 0,
+      soldLast30Days: 0,
+      listingAgeDays: age,
+      endedAt: end,
+    };
+  }
+
+  private sortResearchItems(items: EbayMarketplaceItem[], sort?: string): EbayMarketplaceItem[] {
+    const copy = [...items];
+    copy.sort((a, b) => {
+      if (sort === 'priceAsc') return a.price - b.price;
+      if (sort === 'priceDesc') return b.price - a.price;
+      if (sort === 'newest') return (a.listingAgeDays ?? 999) - (b.listingAgeDays ?? 999);
+      if (sort === 'sold7') return b.soldLast7Days - a.soldLast7Days || b.soldCount - a.soldCount;
+      if (sort === 'sold30') return b.soldLast30Days - a.soldLast30Days || b.soldCount - a.soldCount;
+      return b.soldCount - a.soldCount || b.soldLast30Days - a.soldLast30Days;
+    });
+    return copy;
+  }
+
+  private titleKey(title: string): string {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length > 2)
+      .slice(0, 8)
+      .join(' ');
+  }
+
+  private findingGlobalId(): string {
+    const map: Record<string, string> = {
+      EBAY_GB: 'EBAY-GB',
+      EBAY_US: 'EBAY-US',
+      EBAY_DE: 'EBAY-DE',
+      EBAY_FR: 'EBAY-FR',
+      EBAY_IT: 'EBAY-IT',
+      EBAY_ES: 'EBAY-ES',
+      EBAY_AU: 'EBAY-AU',
+      EBAY_CA: 'EBAY-ENCA',
+    };
+    return map[this.config().marketplaceId] ?? 'EBAY-GB';
+  }
+
+  private firstFinding(value: unknown): Record<string, unknown> | undefined {
+    if (Array.isArray(value)) {
+      const first = value[0];
+      return first && typeof first === 'object' ? (first as Record<string, unknown>) : undefined;
+    }
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+  }
+
+  private firstFindingValue(value: unknown): string | undefined {
+    if (value == null) return undefined;
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (Array.isArray(value)) return this.firstFindingValue(value[0]);
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      if (record.__value__ != null) return String(record.__value__);
+    }
+    return undefined;
+  }
+
+  private parseFindingDate(value?: string): Date | undefined {
+    if (!value) return undefined;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date;
   }
 
   async getAccountInfo(accessToken: string): Promise<MarketplaceAccountInfo> {
@@ -615,7 +947,8 @@ export class EbayRestClient {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'Content-Language': 'en-US',
+        'Content-Language': 'en-GB',
+        'Accept-Language': 'en-GB',
         'X-EBAY-C-MARKETPLACE-ID': this.config().marketplaceId,
         Accept: 'application/json',
       },

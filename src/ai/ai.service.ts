@@ -251,13 +251,13 @@ export class AiService {
         userId: account.id,
         type,
         prompt: user,
-        model: dto.model || this.openai.defaultModel(),
+        model: this.openai.defaultModel(),
         status: AIStatus.PENDING,
       },
     });
 
     try {
-      const completion = await this.openai.completeJson(system, user, dto.model);
+      const completion = await this.openai.completeJson(system, user);
       const payload = this.openai.parseJsonObject(completion.text);
       return { request, completion, payload };
     } catch (error) {

@@ -8,7 +8,7 @@ import { EbayService } from '../integrations/ebay/ebay.service';
 import { MarketplaceOrder } from '../integrations/marketplace/marketplace.types';
 import { ProfitService } from '../profit/profit.service';
 import { UsersService } from '../users/users.service';
-import { ListOrdersQueryDto, UpdateOrderDto } from './dto/order.dto';
+import { CreateAliExpressPurchaseDto, ListOrdersQueryDto, UpdateOrderDto } from './dto/order.dto';
 import { OrderRecord, OrderView } from './orders.types';
 
 const ORDER_INCLUDE = {
@@ -131,7 +131,9 @@ export class OrdersService {
       }
     }
 
-    const aliexpress = await this.syncAliExpressOrders(user.id);
+    const aliexpress = force
+      ? await this.syncAliExpressOrders(user.id)
+      : { upserted: 0, error: null };
     this.syncedAt.set(user.id, Date.now());
     return {
       upserted,
@@ -141,6 +143,50 @@ export class OrdersService {
       aliexpressError: aliexpress.error,
       skipped: false,
     };
+  }
+
+  async createAliExpressPurchase(
+    dto: CreateAliExpressPurchaseDto,
+    identity?: AuthenticatedUser,
+  ): Promise<OrderView> {
+    const user = await this.users.findCurrent(identity);
+    const store = await this.ensureAliExpressStore(user.id);
+    const mapped = this.mapAliExpressStatus(dto.status ?? 'PAID');
+    const placedAt = dto.placedAt ? new Date(dto.placedAt) : new Date();
+    const amount = dto.totalAmount ?? 0;
+    const order = await this.prisma.order.create({
+      data: {
+        storeId: store.id,
+        channel: 'ALIEXPRESS',
+        externalId: dto.externalId?.trim() || `ae-manual-${Date.now()}`,
+        buyerName: dto.shopName?.trim() || 'AliExpress shop',
+        status: mapped.status,
+        fulfillmentStatus: mapped.fulfillment,
+        currency: 'GBP',
+        totalAmount: amount,
+        supplierCost: amount,
+        trackingCode: dto.trackingCode?.trim() || null,
+        trackingCarrier: dto.trackingCarrier?.trim() || null,
+        placedAt: Number.isNaN(placedAt.getTime()) ? new Date() : placedAt,
+        shippedAt:
+          mapped.fulfillment === FulfillmentStatus.SHIPPED ||
+          mapped.fulfillment === FulfillmentStatus.DELIVERED
+            ? new Date()
+            : null,
+        items: {
+          create: [
+            {
+              title: dto.title.trim(),
+              quantity: 1,
+              unitPrice: amount,
+              unitCost: amount,
+            },
+          ],
+        },
+      },
+      include: ORDER_INCLUDE,
+    });
+    return this.toView(order);
   }
 
   async pushTracking(id: string, identity?: AuthenticatedUser): Promise<OrderView> {
@@ -186,19 +232,7 @@ export class OrdersService {
       return { upserted: 0, error: remote.error };
     }
 
-    let store = await this.prisma.store.findFirst({
-      where: { userId, platform: Platform.ALIEXPRESS },
-    });
-    if (!store) {
-      store = await this.prisma.store.create({
-        data: {
-          userId,
-          name: 'AliExpress',
-          platform: Platform.ALIEXPRESS,
-          status: 'CONNECTED',
-        },
-      });
-    }
+    const store = await this.ensureAliExpressStore(userId);
 
     let upserted = 0;
     for (const order of remote.orders) {
@@ -244,20 +278,37 @@ export class OrdersService {
     return { upserted, error: remote.error ?? null };
   }
 
+  private async ensureAliExpressStore(userId: string) {
+    const existing = await this.prisma.store.findFirst({
+      where: { userId, platform: Platform.ALIEXPRESS },
+    });
+    if (existing) return existing;
+    return this.prisma.store.create({
+      data: {
+        userId,
+        name: 'AliExpress',
+        platform: Platform.ALIEXPRESS,
+        status: 'CONNECTED',
+      },
+    });
+  }
+
   private mapAliExpressStatus(status: string): {
     status: OrderStatus;
     fulfillment: FulfillmentStatus;
   } {
     const value = status.toUpperCase();
-    if (value.includes('FINISH')) return { status: OrderStatus.DELIVERED, fulfillment: FulfillmentStatus.DELIVERED };
-    if (value.includes('WAIT_BUYER_ACCEPT')) {
+    if (value.includes('DELIVER') || value.includes('FINISH')) {
+      return { status: OrderStatus.DELIVERED, fulfillment: FulfillmentStatus.DELIVERED };
+    }
+    if (value.includes('SHIP') || value.includes('WAIT_BUYER_ACCEPT')) {
       return { status: OrderStatus.SHIPPED, fulfillment: FulfillmentStatus.SHIPPED };
     }
-    if (value.includes('CANCEL') || value.includes('INVALID')) {
+    if (value.includes('CANCEL') || value.includes('INVALID') || value.includes('REFUND')) {
       return { status: OrderStatus.CANCELLED, fulfillment: FulfillmentStatus.UNFULFILLED };
     }
-    if (value.includes('PLACE_ORDER')) {
-      return { status: OrderStatus.PENDING, fulfillment: FulfillmentStatus.UNFULFILLED };
+    if (value.includes('PENDING') || value.includes('PLACE_ORDER') || value.includes('PROCESS')) {
+      return { status: OrderStatus.PENDING, fulfillment: FulfillmentStatus.PROCESSING };
     }
     return { status: OrderStatus.PAID, fulfillment: FulfillmentStatus.PROCESSING };
   }

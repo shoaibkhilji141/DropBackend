@@ -1,13 +1,31 @@
 import { Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { SearchSupplierProductsDto } from './dto/product.dto';
+import { EbayService } from '../integrations/ebay/ebay.service';
+import { SearchEbayResearchDto, SearchSupplierProductsDto } from './dto/product.dto';
 import { ProductsService } from './products.service';
 import { ProductView, ResearchProductView, ResearchSearchResultView } from './products.types';
 
 @ApiTags('product-research')
 @Controller('research')
 export class ResearchController {
-  constructor(private readonly productsService: ProductsService) {}
+  constructor(
+    private readonly productsService: ProductsService,
+    private readonly ebay: EbayService,
+  ) {}
+
+  @Get('ebay')
+  @ApiOperation({ summary: 'Search live eBay UK listings for product research' })
+  searchEbay(@Query() query: SearchEbayResearchDto) {
+    return this.ebay.searchMarketplace({
+      q: query.q,
+      categoryId: query.categoryId,
+      minPrice: query.minPrice,
+      maxPrice: query.maxPrice,
+      condition: query.condition,
+      sort: query.sort,
+      limit: query.limit,
+    });
+  }
 
   @Get('products')
   @ApiOperation({

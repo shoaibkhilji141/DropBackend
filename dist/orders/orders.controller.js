@@ -33,6 +33,9 @@ let OrdersController = class OrdersController {
     sync(user) {
         return this.ordersService.syncFromEbay(user);
     }
+    createAliExpressPurchase(dto, user) {
+        return this.ordersService.createAliExpressPurchase(dto, user);
+    }
     pushTracking(id, user) {
         return this.ordersService.pushTracking(id, user);
     }
@@ -68,6 +71,15 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], OrdersController.prototype, "sync", null);
+__decorate([
+    (0, common_1.Post)('aliexpress'),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [order_dto_1.CreateAliExpressPurchaseDto, Object]),
+    __metadata("design:returntype", Promise)
+], OrdersController.prototype, "createAliExpressPurchase", null);
 __decorate([
     (0, common_1.Post)(':id/push-tracking'),
     openapi.ApiResponse({ status: 201, type: Object }),

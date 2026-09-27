@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { OrderStatus } from '@prisma/client';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthenticatedUser } from '../auth/jwt.strategy';
-import { ListOrdersQueryDto, UpdateOrderDto } from './dto/order.dto';
+import { CreateAliExpressPurchaseDto, ListOrdersQueryDto, UpdateOrderDto } from './dto/order.dto';
 import { OrdersService } from './orders.service';
 import { OrderView } from './orders.types';
 
@@ -28,6 +28,14 @@ export class OrdersController {
   @Post('sync')
   sync(@CurrentUser() user?: AuthenticatedUser): Promise<{ upserted: number }> {
     return this.ordersService.syncFromEbay(user);
+  }
+
+  @Post('aliexpress')
+  createAliExpressPurchase(
+    @Body() dto: CreateAliExpressPurchaseDto,
+    @CurrentUser() user?: AuthenticatedUser,
+  ): Promise<OrderView> {
+    return this.ordersService.createAliExpressPurchase(dto, user);
   }
 
   @Post(':id/push-tracking')

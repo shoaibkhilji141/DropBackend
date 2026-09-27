@@ -16,7 +16,7 @@ import {
   MarketplaceOrderItem,
   SellerListing,
 } from '../marketplace/marketplace.types';
-import { EbayRestClient } from './ebay-rest.client';
+import { EbayMarketplaceItem, EbayResearchQuery, EbayRestClient } from './ebay-rest.client';
 
 export interface MarketplaceStatus extends MarketplaceConnectionView {
   platform: 'EBAY';
@@ -148,6 +148,16 @@ export class EbayService {
       throw new BadRequestException('eBay access expired. Reconnect the seller account.');
     }
     return account.accessToken;
+  }
+
+  async searchMarketplace(
+    query?: string | EbayResearchQuery,
+  ): Promise<{ items: EbayMarketplaceItem[]; marketplace: string }> {
+    const items = await this.client.searchMarketplace(query ?? {});
+    return {
+      items,
+      marketplace: this.configService.get<EbayConfig>('ebay')?.marketplaceId ?? 'EBAY_GB',
+    };
   }
 
   async publishListing(userId: string, listingId: string) {

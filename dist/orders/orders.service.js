@@ -120,7 +120,9 @@ let OrdersService = class OrdersService {
                 listingError = error instanceof Error ? error.message : 'eBay sync failed';
             }
         }
-        const aliexpress = await this.syncAliExpressOrders(user.id);
+        const aliexpress = force
+            ? await this.syncAliExpressOrders(user.id)
+            : { upserted: 0, error: null };
         this.syncedAt.set(user.id, Date.now());
         return {
             upserted,
@@ -130,6 +132,45 @@ let OrdersService = class OrdersService {
             aliexpressError: aliexpress.error,
             skipped: false,
         };
+    }
+    async createAliExpressPurchase(dto, identity) {
+        const user = await this.users.findCurrent(identity);
+        const store = await this.ensureAliExpressStore(user.id);
+        const mapped = this.mapAliExpressStatus(dto.status ?? 'PAID');
+        const placedAt = dto.placedAt ? new Date(dto.placedAt) : new Date();
+        const amount = dto.totalAmount ?? 0;
+        const order = await this.prisma.order.create({
+            data: {
+                storeId: store.id,
+                channel: 'ALIEXPRESS',
+                externalId: dto.externalId?.trim() || `ae-manual-${Date.now()}`,
+                buyerName: dto.shopName?.trim() || 'AliExpress shop',
+                status: mapped.status,
+                fulfillmentStatus: mapped.fulfillment,
+                currency: 'GBP',
+                totalAmount: amount,
+                supplierCost: amount,
+                trackingCode: dto.trackingCode?.trim() || null,
+                trackingCarrier: dto.trackingCarrier?.trim() || null,
+                placedAt: Number.isNaN(placedAt.getTime()) ? new Date() : placedAt,
+                shippedAt: mapped.fulfillment === client_1.FulfillmentStatus.SHIPPED ||
+                    mapped.fulfillment === client_1.FulfillmentStatus.DELIVERED
+                    ? new Date()
+                    : null,
+                items: {
+                    create: [
+                        {
+                            title: dto.title.trim(),
+                            quantity: 1,
+                            unitPrice: amount,
+                            unitCost: amount,
+                        },
+                    ],
+                },
+            },
+            include: ORDER_INCLUDE,
+        });
+        return this.toView(order);
     }
     async pushTracking(id, identity) {
         const user = await this.users.findCurrent(identity);
@@ -172,19 +213,7 @@ let OrdersService = class OrdersService {
         if (remote.error && remote.orders.length === 0) {
             return { upserted: 0, error: remote.error };
         }
-        let store = await this.prisma.store.findFirst({
-            where: { userId, platform: client_1.Platform.ALIEXPRESS },
-        });
-        if (!store) {
-            store = await this.prisma.store.create({
-                data: {
-                    userId,
-                    name: 'AliExpress',
-                    platform: client_1.Platform.ALIEXPRESS,
-                    status: 'CONNECTED',
-                },
-            });
-        }
+        const store = await this.ensureAliExpressStore(userId);
         let upserted = 0;
         for (const order of remote.orders) {
             if (!order.externalId)
@@ -229,18 +258,34 @@ let OrdersService = class OrdersService {
         }
         return { upserted, error: remote.error ?? null };
     }
+    async ensureAliExpressStore(userId) {
+        const existing = await this.prisma.store.findFirst({
+            where: { userId, platform: client_1.Platform.ALIEXPRESS },
+        });
+        if (existing)
+            return existing;
+        return this.prisma.store.create({
+            data: {
+                userId,
+                name: 'AliExpress',
+                platform: client_1.Platform.ALIEXPRESS,
+                status: 'CONNECTED',
+            },
+        });
+    }
     mapAliExpressStatus(status) {
         const value = status.toUpperCase();
-        if (value.includes('FINISH'))
+        if (value.includes('DELIVER') || value.includes('FINISH')) {
             return { status: client_1.OrderStatus.DELIVERED, fulfillment: client_1.FulfillmentStatus.DELIVERED };
-        if (value.includes('WAIT_BUYER_ACCEPT')) {
+        }
+        if (value.includes('SHIP') || value.includes('WAIT_BUYER_ACCEPT')) {
             return { status: client_1.OrderStatus.SHIPPED, fulfillment: client_1.FulfillmentStatus.SHIPPED };
         }
-        if (value.includes('CANCEL') || value.includes('INVALID')) {
+        if (value.includes('CANCEL') || value.includes('INVALID') || value.includes('REFUND')) {
             return { status: client_1.OrderStatus.CANCELLED, fulfillment: client_1.FulfillmentStatus.UNFULFILLED };
         }
-        if (value.includes('PLACE_ORDER')) {
-            return { status: client_1.OrderStatus.PENDING, fulfillment: client_1.FulfillmentStatus.UNFULFILLED };
+        if (value.includes('PENDING') || value.includes('PLACE_ORDER') || value.includes('PROCESS')) {
+            return { status: client_1.OrderStatus.PENDING, fulfillment: client_1.FulfillmentStatus.PROCESSING };
         }
         return { status: client_1.OrderStatus.PAID, fulfillment: client_1.FulfillmentStatus.PROCESSING };
     }

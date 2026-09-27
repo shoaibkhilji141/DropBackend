@@ -134,13 +134,6 @@ export const configuration = (): Configuration => {
   const groqKey = str(process.env.GROQ_API_KEY);
   const openaiApiKey = str(process.env.OPENAI_API_KEY);
   const allProviders: AiProviderConfig[] = [];
-  if (openaiApiKey) {
-    allProviders.push({
-      name: 'openai',
-      apiKey: openaiApiKey,
-      model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
-    });
-  }
   if (groqKey) {
     allProviders.push({
       name: 'groq',
@@ -153,8 +146,15 @@ export const configuration = (): Configuration => {
     allProviders.push({
       name: 'gemini',
       apiKey: geminiKey,
-      model: str(process.env.GEMINI_MODEL, 'gemini-2.0-flash'),
+      model: str(process.env.GEMINI_MODEL, 'gemini-2.5-flash'),
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    });
+  }
+  if (openaiApiKey) {
+    allProviders.push({
+      name: 'openai',
+      apiKey: openaiApiKey,
+      model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
     });
   }
   const ai = allProviders[0] ?? {

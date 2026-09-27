@@ -137,6 +137,13 @@ let EbayService = EbayService_1 = class EbayService {
         }
         return account.accessToken;
     }
+    async searchMarketplace(query) {
+        const items = await this.client.searchMarketplace(query ?? {});
+        return {
+            items,
+            marketplace: this.configService.get('ebay')?.marketplaceId ?? 'EBAY_GB',
+        };
+    }
     async publishListing(userId, listingId) {
         const listing = await this.prisma.listing.findUnique({
             where: { id: listingId },

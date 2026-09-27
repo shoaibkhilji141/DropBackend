@@ -191,3 +191,47 @@ export class UpdateProductDto {
   @IsEnum(ProductStatus)
   status?: ProductStatus;
 }
+
+export class SearchEbayResearchDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  @ApiPropertyOptional({ description: 'eBay category id' })
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  minPrice?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  maxPrice?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsIn(['NEW', 'USED', ''])
+  condition?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsIn(['sold', 'sold7', 'sold30', 'priceAsc', 'priceDesc', 'newest'])
+  sort?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}

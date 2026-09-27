@@ -16,6 +16,15 @@ const GATEWAY = 'https://api-sg.aliexpress.com/sync';
 const AUTHORIZE = 'https://api-sg.aliexpress.com/oauth/authorize';
 const TOKEN = 'https://oauth.aliexpress.com/token';
 const REST = 'https://api-sg.aliexpress.com/rest';
+const MIN_CALL_GAP_MS = 2000;
+const ORDER_LIST_GAP_MS = 8000;
+const ORDER_LIST_CACHE_MS = 10 * 60 * 1000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+interface AliExpressCallOptions {
+  maxRetries?: number;
+  minGapMs?: number;
+}
 
 interface AliExpressCallResult {
   method: string;
@@ -27,6 +36,11 @@ interface AliExpressCallResult {
 @Injectable()
 export class AliExpressApiClient {
   private readonly logger = new Logger(AliExpressApiClient.name);
+  private callChain: Promise<unknown> = Promise.resolve();
+  private lastCallAt = 0;
+  private listOrdersInFlight: Promise<{ orders: MarketplaceOrder[]; error?: string }> | null = null;
+  private listOrdersCache: { at: number; result: { orders: MarketplaceOrder[]; error?: string } } | null =
+    null;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -178,6 +192,42 @@ export class AliExpressApiClient {
     method: string,
     accessToken: string,
     business: Record<string, string | number | boolean | undefined> = {},
+    options: AliExpressCallOptions = {},
+  ): Promise<AliExpressCallResult> {
+    const run = this.callChain.then(() => this.callThrottled(method, accessToken, business, options));
+    this.callChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async callThrottled(
+    method: string,
+    accessToken: string,
+    business: Record<string, string | number | boolean | undefined>,
+    options: AliExpressCallOptions,
+  ): Promise<AliExpressCallResult> {
+    const maxRetries = options.maxRetries ?? 1;
+    const minGap = options.minGapMs ?? MIN_CALL_GAP_MS;
+    let last: AliExpressCallResult | undefined;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const wait = minGap - (Date.now() - this.lastCallAt);
+      if (wait > 0) await sleep(wait);
+      this.lastCallAt = Date.now();
+      last = await this.executeCall(method, accessToken, business);
+      const banMs = this.frequencyBanMs(last.error);
+      if (banMs == null || attempt === maxRetries) return last;
+      this.logger.warn(`${method}: rate limited, retry ${attempt + 1}/${maxRetries} after ${banMs}ms`);
+      await sleep(Math.max(banMs, minGap));
+    }
+    return last as AliExpressCallResult;
+  }
+
+  private async executeCall(
+    method: string,
+    accessToken: string,
+    business: Record<string, string | number | boolean | undefined>,
   ): Promise<AliExpressCallResult> {
     const config = this.config();
     const params: Record<string, string> = {
@@ -210,6 +260,12 @@ export class AliExpressApiClient {
     }
 
     return { method, ok: !error, payload, error };
+  }
+
+  private frequencyBanMs(error?: string): number | null {
+    if (!error || !/frequency|rate limit|ban will last/i.test(error)) return null;
+    const seconds = Number(/ban will last\s+(\d+)/i.exec(error)?.[1] ?? 1);
+    return Math.max(1200, (Number.isFinite(seconds) ? seconds : 1) * 1000 + 400);
   }
 
   async search(accessToken: string, query: SupplierSearchQuery): Promise<SupplierSearchResult> {
@@ -301,108 +357,153 @@ export class AliExpressApiClient {
   }
 
   async listOrders(accessToken: string): Promise<{ orders: MarketplaceOrder[]; error?: string }> {
-    const start = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
-    const end = new Date();
-    const pad = (value: number) => String(value).padStart(2, '0');
-    const fmt = (date: Date) =>
-      `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
-    const usFmt = (date: Date) =>
-      `${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())}/${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
-    const stamp = fmt(start);
-    const query = {
-      current_page: 1,
-      page: 1,
-      page_size: 50,
-      create_date_start: stamp,
-      create_date_end: fmt(end),
-    };
-    const attempts = [
-      {
-        method: 'aliexpress.ds.commissionorder.listbyIndex',
-        body: {
-          param1: JSON.stringify({
-            start_time: stamp,
-            end_time: fmt(end),
-            page_size: 50,
-            page_no: 1,
-          }),
-        },
-      },
-      {
-        method: 'aliexpress.ascp.po.queryPurchasingOrders',
-        body: {
-          create_time_start: stamp,
-          create_time_end: fmt(end),
-          page_index: 1,
-          page_size: 50,
-        },
-      },
-      {
-        method: 'aliexpress.trade.buyer.order.list.get',
-        body: { param_order_list_request: JSON.stringify(query) },
-      },
-      {
-        method: 'aliexpress.trade.buyer.orderlist.get',
-        body: { param_order_list_request: JSON.stringify(query) },
-      },
-      {
-        method: 'aliexpress.trade.buyer.orderlist.get',
-        body: { param_aeop_order_query: JSON.stringify(query) },
-      },
-      {
-        method: 'aliexpress.trade.redefining.findorderlistquery',
-        body: { param1: JSON.stringify({ ...query, create_date_start: usFmt(start), create_date_end: usFmt(end) }) },
-      },
-      {
-        method: 'aliexpress.trade.seller.orderlist.get',
-        body: { param_aeop_order_query: JSON.stringify(query) },
-      },
-    ];
+    if (this.listOrdersInFlight) return this.listOrdersInFlight;
+    this.listOrdersInFlight = this.listOrdersOnce(accessToken).finally(() => {
+      this.listOrdersInFlight = null;
+    });
+    return this.listOrdersInFlight;
+  }
 
-    let lastError = '';
-    let result: AliExpressCallResult | null = null;
-    for (const attempt of attempts) {
-      result = await this.call(attempt.method, accessToken, attempt.body);
-      if (result.ok) break;
-      lastError = result.error || lastError;
+  private async listOrdersOnce(
+    accessToken: string,
+  ): Promise<{ orders: MarketplaceOrder[]; error?: string }> {
+    const cached = this.listOrdersCache;
+    if (cached && Date.now() - cached.at < ORDER_LIST_CACHE_MS) {
+      return cached.result;
     }
-    if (!result?.ok) {
-      return {
-        orders: [],
-        error:
-          lastError ||
-          'This AliExpress app is not allowed to list orders. eBay sales still sync; grant buyer/seller order APIs in the AliExpress open console.',
-      };
+
+    const end = new Date();
+    const start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const result = await this.callDropshipOrderList(accessToken, start, end, 'Payment Completed');
+
+    if (!result.ok) {
+      const rateLimited = this.frequencyBanMs(result.error) != null;
+      const error = rateLimited
+        ? 'AliExpress blocked the purchase-list API (ApiCallLimit). Your Drop Shipping app cannot read website My Orders — only orders placed through the DS API. Wait 10 minutes, or add a My Orders purchase manually.'
+        : result.error ||
+          'Drop Shipping order list was refused. Buyer My Orders APIs are not granted to Drop Shipping apps.';
+      const empty = { orders: [], error };
+      this.listOrdersCache = { at: Date.now(), result: empty };
+      return empty;
     }
 
     const seen = new Set<string>();
     const orders: MarketplaceOrder[] = [];
     for (const row of this.findOrderRows(result.payload)) {
-      const externalId = String(
-        row.order_id ?? row.orderId ?? row.order_id_str ?? row.purchase_order_no ?? row.trade_order_id ?? '',
-      );
-      if (!externalId || seen.has(externalId)) continue;
-      seen.add(externalId);
-      const amount = this.money(row.pay_amount ?? row.order_amount ?? row.orderAmount);
-      const currency =
-        this.currencyOf(row.pay_amount ?? row.order_amount) ||
-        String(row.currency_code ?? 'GBP');
-      const created = String(row.gmt_create ?? row.gmtCreate ?? row.gmt_pay_time ?? '');
-      const tracking = this.orderTracking(row);
-      orders.push({
-        externalId,
-        buyerName: this.orderShopName(row),
-        shopName: this.orderShopName(row),
-        status: String(row.order_status ?? row.orderStatus ?? 'PAID'),
-        currency,
-        totalAmount: amount,
-        placedAt: created ? new Date(created.replace(' ', 'T') + 'Z') : new Date(),
-        trackingCode: tracking.code,
-        trackingCarrier: tracking.carrier,
-        items: this.orderLineItems(row),
-      });
+      const mapped = this.mapPurchaseRow(row);
+      if (!mapped || seen.has(mapped.externalId)) continue;
+      seen.add(mapped.externalId);
+      orders.push(mapped);
     }
-    return { orders };
+
+    for (const order of orders.slice(0, 5)) {
+      const detail = await this.getDropshipOrder(accessToken, order.externalId);
+      if (!detail) continue;
+      order.shopName = detail.shopName || order.shopName;
+      order.buyerName = order.shopName;
+      order.trackingCode = detail.trackingCode || order.trackingCode;
+      order.trackingCarrier = detail.trackingCarrier || order.trackingCarrier;
+      if (detail.items.length > 0) order.items = detail.items;
+      if (detail.totalAmount) order.totalAmount = detail.totalAmount;
+      if (detail.currency) order.currency = detail.currency;
+      if (detail.status) order.status = detail.status;
+    }
+
+    const mapped = {
+      orders,
+      error:
+        orders.length === 0
+          ? 'No Drop Shipping API purchases in the last 30 days. AliExpress website My Orders (Processing / Paid / Delivered) are not exposed to this app — add them with Add My Order.'
+          : undefined,
+    };
+    this.listOrdersCache = { at: Date.now(), result: mapped };
+    return mapped;
+  }
+
+  private async callDropshipOrderList(
+    accessToken: string,
+    start: Date,
+    end: Date,
+    status: string,
+  ): Promise<AliExpressCallResult> {
+    const body = {
+      start_time: this.pstTimestamp(start),
+      end_time: this.pstTimestamp(end),
+      status,
+      page_size: 50,
+      page_no: 1,
+    };
+    return this.call('aliexpress.ds.commissionorder.listbyindex', accessToken, body, {
+      maxRetries: 0,
+      minGapMs: ORDER_LIST_GAP_MS,
+    });
+  }
+
+  private async getDropshipOrder(accessToken: string, orderId: string): Promise<MarketplaceOrder | null> {
+    for (const method of ['aliexpress.ds.trade.order.get', 'aliexpress.trade.ds.order.get'] as const) {
+      const result = await this.call(method, accessToken, { order_id: orderId }, { maxRetries: 0, minGapMs: 2500 });
+      if (!result.ok) continue;
+      const row = this.findOrderRows(result.payload)[0];
+      if (row) return this.mapPurchaseRow(row);
+    }
+    return null;
+  }
+
+  private mapPurchaseRow(row: Record<string, unknown>): MarketplaceOrder | null {
+    const externalId = String(
+      row.order_id ??
+        row.orderId ??
+        row.order_number ??
+        row.order_id_str ??
+        row.parent_order_number ??
+        row.purchase_order_no ??
+        row.trade_order_id ??
+        '',
+    );
+    if (!externalId) return null;
+    const amount = this.money(
+      row.paid_amount ?? row.finished_amount ?? row.pay_amount ?? row.order_amount ?? row.orderAmount,
+    );
+    const currency =
+      this.currencyOf(row.pay_amount ?? row.order_amount) ||
+      String(row.publisher_settled_currency ?? row.currency_code ?? 'GBP');
+    const created = String(
+      row.paid_time ??
+        row.created_time ??
+        row.gmt_create ??
+        row.gmtCreate ??
+        row.gmt_pay_time ??
+        row.completed_time ??
+        '',
+    );
+    const tracking = this.orderTracking(row);
+    return {
+      externalId,
+      buyerName: this.orderShopName(row),
+      shopName: this.orderShopName(row),
+      status: String(row.order_status ?? row.orderStatus ?? row.effect_status ?? 'PAID'),
+      currency,
+      totalAmount: amount,
+      placedAt: created ? new Date(created.replace(' ', 'T') + 'Z') : new Date(),
+      trackingCode: tracking.code,
+      trackingCarrier: tracking.carrier,
+      items: this.orderLineItems(row),
+    };
+  }
+
+  private pstTimestamp(date: Date): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '00';
+    return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
   }
 
   private async recommend(accessToken: string): Promise<SupplierProduct[]> {
@@ -679,13 +780,23 @@ export class AliExpressApiClient {
         return;
       }
       const record = node as Record<string, unknown>;
-      const id = record.order_id ?? record.orderId ?? record.order_id_str ?? record.purchase_order_no ?? record.trade_order_id;
+      const id =
+        record.order_id ??
+        record.orderId ??
+        record.order_number ??
+        record.order_id_str ??
+        record.parent_order_number ??
+        record.purchase_order_no ??
+        record.trade_order_id;
       if (
         id != null &&
         (record.order_status != null ||
           record.orderStatus != null ||
           record.gmt_create != null ||
           record.gmtCreate != null ||
+          record.paid_time != null ||
+          record.created_time != null ||
+          record.item_title != null ||
           record.product_list != null ||
           record.product_name != null ||
           record.productName != null ||
@@ -713,7 +824,9 @@ export class AliExpressApiClient {
             item.product_name ??
               item.productName ??
               item.product_title ??
+              item.item_title ??
               item.sku_code ??
+              row.item_title ??
               row.product_name ??
               row.product_title ??
               'AliExpress item',
@@ -727,7 +840,7 @@ export class AliExpressApiClient {
     }
     return [
       {
-        title: String(row.product_name ?? row.product_title ?? row.productName ?? 'AliExpress order'),
+        title: String(row.item_title ?? row.product_name ?? row.product_title ?? row.productName ?? 'AliExpress order'),
         quantity: 1,
         unitPrice: this.money(row.pay_amount ?? row.order_amount),
       },

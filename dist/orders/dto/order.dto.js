@@ -9,10 +9,11 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateOrderDto = exports.ListOrdersQueryDto = void 0;
+exports.UpdateOrderDto = exports.CreateAliExpressPurchaseDto = exports.ListOrdersQueryDto = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const client_1 = require("@prisma/client");
+const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
 class ListOrdersQueryDto {
     status;
@@ -48,6 +49,69 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], ListOrdersQueryDto.prototype, "channel", void 0);
+class CreateAliExpressPurchaseDto {
+    title;
+    shopName;
+    externalId;
+    trackingCode;
+    trackingCarrier;
+    placedAt;
+    status;
+    totalAmount;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { title: { required: true, type: () => String }, shopName: { required: false, type: () => String }, externalId: { required: false, type: () => String }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, placedAt: { required: false, type: () => String }, status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, totalAmount: { required: false, type: () => Number, minimum: 0 } };
+    }
+}
+exports.CreateAliExpressPurchaseDto = CreateAliExpressPurchaseDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Item title from AliExpress My Orders' }),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "title", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Shop / store name' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "shopName", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'AliExpress order number' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "externalId", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "trackingCode", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Courier / logistics company' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "trackingCarrier", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Purchase date YYYY-MM-DD' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "placedAt", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ enum: client_1.OrderStatus }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsEnum)(client_1.OrderStatus),
+    __metadata("design:type", String)
+], CreateAliExpressPurchaseDto.prototype, "status", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], CreateAliExpressPurchaseDto.prototype, "totalAmount", void 0);
 class UpdateOrderDto {
     status;
     fulfillmentStatus;

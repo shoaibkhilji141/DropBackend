@@ -47,6 +47,8 @@ exports.OpenAIService = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const openai_1 = __importStar(require("openai"));
+const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
 let OpenAIService = OpenAIService_1 = class OpenAIService {
     configService;
     logger = new common_1.Logger(OpenAIService_1.name);
@@ -61,22 +63,22 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
         return this.config()?.configured ?? false;
     }
     defaultModel() {
-        return this.config()?.model ?? 'gpt-4o-mini';
+        return this.config()?.model ?? 'llama-3.3-70b-versatile';
     }
     provider() {
         const names = this.config()?.providers.map((item) => item.name) ?? [];
-        return names.length > 1 ? `auto (${names.join(' → ')})` : (this.config()?.provider ?? 'openai');
+        return names.length > 1 ? `auto (${names.join(' → ')})` : (this.config()?.provider ?? 'groq');
     }
-    async completeJson(system, user, model) {
+    async completeJson(system, user, _model) {
         const openai = this.config();
         const providers = openai?.providers ?? [];
         if (!openai?.configured || providers.length === 0) {
-            throw new common_1.ServiceUnavailableException('No AI key is configured. Add GEMINI_API_KEY from https://aistudio.google.com/apikey (free) or GROQ_API_KEY / OPENAI_API_KEY.');
+            throw new common_1.ServiceUnavailableException('No AI key is configured. Add GROQ_API_KEY from https://console.groq.com/keys or GEMINI_API_KEY from https://aistudio.google.com/apikey.');
         }
         let lastError = '';
         for (const provider of providers) {
             try {
-                return await this.completeWith(provider, system, user, model);
+                return await this.completeWith(provider, system, user);
             }
             catch (error) {
                 lastError = this.publicError(error, provider.name);
@@ -94,6 +96,17 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
             }
         }
         catch {
+            const match = cleaned.match(/\{[\s\S]*\}/);
+            if (match) {
+                try {
+                    const parsed = JSON.parse(match[0]);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        return parsed;
+                    }
+                }
+                catch {
+                }
+            }
         }
         throw new common_1.BadGatewayException('The AI provider returned a response that was not valid JSON.');
     }
@@ -115,12 +128,32 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
         }
         return items.map((item) => item.trim());
     }
-    async completeWith(provider, system, user, model) {
-        const usedModel = model && provider.name === 'openai' ? model : provider.model;
+    async completeWith(provider, system, user) {
+        if (provider.name === 'gemini') {
+            return this.completeGemini(provider, system, user);
+        }
+        const models = provider.name === 'groq'
+            ? Array.from(new Set([provider.model, ...GROQ_MODELS]))
+            : [provider.model];
+        let lastError;
+        for (const model of models) {
+            for (const jsonMode of [true, false]) {
+                try {
+                    return await this.completeOpenAiCompatible(provider, model, system, user, jsonMode);
+                }
+                catch (error) {
+                    lastError = error;
+                    this.logger.warn(`${provider.name}:${model} ${jsonMode ? 'json' : 'text'} failed: ${this.publicError(error, provider.name)}`);
+                }
+            }
+        }
+        throw lastError instanceof Error ? lastError : new Error(`${provider.name} request failed.`);
+    }
+    async completeOpenAiCompatible(provider, model, system, user, jsonMode) {
         const completion = await this.getClient(provider).chat.completions.create({
-            model: usedModel,
+            model,
             temperature: 0.6,
-            response_format: { type: 'json_object' },
+            ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
             messages: [
                 { role: 'system', content: system },
                 { role: 'user', content: user },
@@ -132,8 +165,54 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
         }
         return {
             text,
-            model: `${provider.name}:${completion.model ?? usedModel}`,
+            model: `${provider.name}:${completion.model ?? model}`,
             tokensUsed: completion.usage?.total_tokens ?? 0,
+        };
+    }
+    async completeGemini(provider, system, user) {
+        const models = Array.from(new Set([provider.model, ...GEMINI_MODELS]));
+        let lastError;
+        for (const model of models) {
+            try {
+                return await this.completeGeminiNative(provider.apiKey, model, system, user);
+            }
+            catch (error) {
+                lastError = error;
+                this.logger.warn(`gemini native ${model} failed: ${this.publicError(error, 'gemini')}`);
+            }
+            try {
+                return await this.completeOpenAiCompatible(provider, model, system, user, true);
+            }
+            catch (error) {
+                lastError = error;
+                this.logger.warn(`gemini openai-compat ${model} failed: ${this.publicError(error, 'gemini')}`);
+            }
+        }
+        throw lastError instanceof Error ? lastError : new Error('Gemini request failed.');
+    }
+    async completeGeminiNative(apiKey, model, system, user) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                systemInstruction: { parts: [{ text: system }] },
+                contents: [{ role: 'user', parts: [{ text: user }] }],
+                generationConfig: { temperature: 0.6, responseMimeType: 'application/json' },
+            }),
+        });
+        const payload = (await response.json().catch(() => ({})));
+        if (!response.ok) {
+            throw new Error(payload.error?.message || `Gemini request failed (${response.status}).`);
+        }
+        const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim() ?? '';
+        if (!text) {
+            throw new Error('Gemini returned an empty response.');
+        }
+        return {
+            text,
+            model: `gemini:${model}`,
+            tokensUsed: payload.usageMetadata?.totalTokenCount ?? 0,
         };
     }
     getClient(provider) {
@@ -154,6 +233,8 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
             const detail = error.message ?? '';
             if (error.status === 401)
                 return `${name} rejected the configured API key.`;
+            if (error.status === 404)
+                return `${name} model was not found.`;
             if (error.status === 429 && /credit|quota|billing/i.test(detail)) {
                 return `${name} has no credits remaining.`;
             }

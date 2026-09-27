@@ -19,7 +19,7 @@ class ListOrdersQueryDto {
     fulfillmentStatus;
     search;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, search: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, search: { required: false, type: () => String } };
     }
 }
 exports.ListOrdersQueryDto = ListOrdersQueryDto;
@@ -52,7 +52,7 @@ class UpdateOrderDto {
     buyerCity;
     buyerCountry;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, buyerName: { required: false, type: () => String }, buyerEmail: { required: false, type: () => String }, buyerAddress: { required: false, type: () => String }, buyerCity: { required: false, type: () => String }, buyerCountry: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, buyerName: { required: false, type: () => String }, buyerEmail: { required: false, type: () => String }, buyerAddress: { required: false, type: () => String }, buyerCity: { required: false, type: () => String }, buyerCountry: { required: false, type: () => String } };
     }
 }
 exports.UpdateOrderDto = UpdateOrderDto;

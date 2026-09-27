@@ -182,13 +182,14 @@ __decorate([
 class UpdateProductDto {
     title;
     description;
+    sourceUrl;
     sellPrice;
     costPrice;
     shippingCost;
     stock;
     status;
     static _OPENAPI_METADATA_FACTORY() {
-        return { title: { required: false, type: () => String }, description: { required: false, type: () => String }, sellPrice: { required: false, type: () => Number, minimum: 0 }, costPrice: { required: false, type: () => Number, minimum: 0 }, shippingCost: { required: false, type: () => Number, minimum: 0 }, stock: { required: false, type: () => Number, minimum: 0 }, status: { required: false, enum: ["SAVED", "IMPORTED", "LISTED", "ARCHIVED"] } };
+        return { title: { required: false, type: () => String }, description: { required: false, type: () => String }, sourceUrl: { required: false, type: () => String }, sellPrice: { required: false, type: () => Number, minimum: 0 }, costPrice: { required: false, type: () => Number, minimum: 0 }, shippingCost: { required: false, type: () => Number, minimum: 0 }, stock: { required: false, type: () => Number, minimum: 0 }, status: { required: false, enum: ["SAVED", "IMPORTED", "LISTED", "ARCHIVED"] } };
     }
 }
 exports.UpdateProductDto = UpdateProductDto;
@@ -204,6 +205,12 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], UpdateProductDto.prototype, "description", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'AliExpress product page used as the supply source' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProductDto.prototype, "sourceUrl", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)(),
     (0, class_validator_1.IsOptional)(),

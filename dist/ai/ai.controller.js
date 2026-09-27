@@ -29,6 +29,9 @@ let AiController = class AiController {
     history() {
         return this.aiService.history();
     }
+    fromUrl(dto) {
+        return this.aiService.generateFromUrl(dto.url);
+    }
     generateTitle(dto) {
         return this.aiService.generateTitle(dto);
     }
@@ -60,6 +63,14 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], AiController.prototype, "history", null);
+__decorate([
+    (0, common_1.Post)('from-url'),
+    openapi.ApiResponse({ status: 201, type: require("./dto/ai.dto").ListingCopyResultDto }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [ai_dto_1.ListingFromUrlDto]),
+    __metadata("design:returntype", Promise)
+], AiController.prototype, "fromUrl", null);
 __decorate([
     (0, common_1.Post)('title'),
     openapi.ApiResponse({ status: 201, type: require("./dto/ai.dto").AiTextResultDto }),

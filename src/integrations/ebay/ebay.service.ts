@@ -217,6 +217,8 @@ export class EbayService {
    */
   async syncShop(userId: string): Promise<{ listings: number; orders: number; listingError: string | null }> {
     const token = await this.accessToken(userId);
+    await this.purgeDemoCatalog();
+
     let listingError: string | null = null;
     let remote: SellerListing[] = [];
 
@@ -227,24 +229,33 @@ export class EbayService {
       this.logger.warn(listingError);
     }
 
-    const orderRemote = await this.client.listOrders(token);
+    let orderRemote: MarketplaceOrder[] = [];
+    try {
+      orderRemote = await this.client.listOrders(token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not load eBay orders';
+      this.logger.warn(message);
+      listingError = [listingError, message].filter(Boolean).join(' ');
+    }
+
     if (remote.length === 0) {
       const fromOrders = this.listingsFromOrders(orderRemote);
       if (fromOrders.length > 0) {
         remote = fromOrders;
         listingError = null;
       }
+    } else {
+      const sold = new Map<string, number>();
+      for (const listing of this.listingsFromOrders(orderRemote)) {
+        sold.set(listing.itemId, listing.soldCount);
+      }
+      for (const listing of remote) {
+        listing.soldCount = Math.max(listing.soldCount, sold.get(listing.itemId) ?? 0);
+      }
     }
 
     const listingCount = remote.length > 0 ? await this.upsertSellerListings(userId, remote) : 0;
-    if (remote.length > 0 || listingError === null) {
-      await this.purgeDemoCatalog();
-    }
-
     const orders = await this.syncOrders(userId, orderRemote);
-    if (listingError && orders > 0) {
-      await this.prisma.order.deleteMany({ where: { externalId: { startsWith: 'EB-' } } });
-    }
     return { listings: listingCount, orders, listingError };
   }
 

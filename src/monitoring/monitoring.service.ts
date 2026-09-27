@@ -2,13 +2,17 @@ import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   AlertSeverity,
   AlertType,
+  LinkStatus,
   MonitoringType,
+  Platform,
   PriceHistory,
   Prisma,
   ShippingHistory,
   StockHistory,
 } from '@prisma/client';
+import { liveProductWhere } from '../common/demo-data';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { IntegrationAccountsService } from '../integrations/accounts/integration-accounts.service';
 import { ListingsService } from '../listings/listings.service';
 import {
   SUPPLIER_PRODUCT_PROVIDER,
@@ -42,11 +46,27 @@ export class MonitoringService {
     @Inject(SUPPLIER_PRODUCT_PROVIDER)
     private readonly supplier: SupplierProductProvider,
     private readonly listings: ListingsService,
+    private readonly accounts: IntegrationAccountsService,
   ) {}
 
+  private async liveShop(): Promise<boolean> {
+    const [ebay, aliexpress] = await Promise.all([
+      this.accounts.findConnected(Platform.EBAY),
+      this.accounts.findConnected(Platform.ALIEXPRESS),
+    ]);
+    return (
+      (ebay?.status === LinkStatus.CONNECTED && !this.accounts.isExpired(ebay)) ||
+      (aliexpress?.status === LinkStatus.CONNECTED && !this.accounts.isExpired(aliexpress))
+    );
+  }
+
   async priceHistory(productId?: string): Promise<PriceHistory[]> {
+    const live = await this.liveShop();
     return this.prisma.priceHistory.findMany({
-      where: productId ? { productId } : undefined,
+      where: {
+        ...(productId ? { productId } : {}),
+        ...(live && !productId ? { product: liveProductWhere() } : {}),
+      },
       orderBy: { recordedAt: 'desc' },
       take: 200,
       include: { product: { select: { title: true } } },
@@ -54,8 +74,12 @@ export class MonitoringService {
   }
 
   async stockHistory(productId?: string): Promise<StockHistory[]> {
+    const live = await this.liveShop();
     return this.prisma.stockHistory.findMany({
-      where: productId ? { productId } : undefined,
+      where: {
+        ...(productId ? { productId } : {}),
+        ...(live && !productId ? { product: liveProductWhere() } : {}),
+      },
       orderBy: { recordedAt: 'desc' },
       take: 200,
       include: { product: { select: { title: true } } },
@@ -63,8 +87,12 @@ export class MonitoringService {
   }
 
   async shippingHistory(productId?: string): Promise<ShippingHistory[]> {
+    const live = await this.liveShop();
     return this.prisma.shippingHistory.findMany({
-      where: productId ? { productId } : undefined,
+      where: {
+        ...(productId ? { productId } : {}),
+        ...(live && !productId ? { product: liveProductWhere() } : {}),
+      },
       orderBy: { recordedAt: 'desc' },
       take: 200,
       include: { product: { select: { title: true } } },
@@ -72,8 +100,16 @@ export class MonitoringService {
   }
 
   async alerts(query: ListAlertsQueryDto = {}): Promise<AlertView[]> {
+    const live = await this.liveShop();
     const rows = await this.prisma.alert.findMany({
-      where: query.unreadOnly ? { readAt: null } : undefined,
+      where: {
+        ...(query.unreadOnly ? { readAt: null } : {}),
+        ...(live
+          ? {
+              OR: [{ productId: null }, { product: liveProductWhere() }],
+            }
+          : {}),
+      },
       include: { product: { select: { id: true, title: true } } },
       orderBy: { createdAt: 'desc' },
       take: 100,
@@ -104,8 +140,12 @@ export class MonitoringService {
   }
 
   async rules(type?: MonitoringType): Promise<MonitoringRuleView[]> {
+    const live = await this.liveShop();
     const rows = await this.prisma.monitoringRule.findMany({
-      where: type ? { type } : undefined,
+      where: {
+        ...(type ? { type } : {}),
+        ...(live ? { product: liveProductWhere() } : {}),
+      },
       include: { product: true },
       orderBy: { createdAt: 'desc' },
     });
@@ -509,9 +549,13 @@ export class MonitoringService {
     });
   }
 
-  private loadRules(type: MonitoringType): Promise<MonitoringRuleRecord[]> {
+  private async loadRules(type: MonitoringType): Promise<MonitoringRuleRecord[]> {
+    const live = await this.liveShop();
     return this.prisma.monitoringRule.findMany({
-      where: { type },
+      where: {
+        type,
+        ...(live ? { product: liveProductWhere() } : {}),
+      },
       include: { product: true },
       orderBy: { updatedAt: 'desc' },
     });

@@ -35,7 +35,7 @@ let HealthController = class HealthController {
             integrations: {
                 auth0: this.configService.get('auth0')?.enabled ?? false,
                 redis: Boolean(redisConfig?.enabled && (await this.redis.ping())),
-                openai: this.configService.get('openai')?.configured ?? false,
+                openai: Boolean(this.configService.get('openai')?.configured),
                 ebay: this.configService.get('ebay')?.configured ?? false,
                 aliexpress: this.configService.get('aliexpress')?.configured ?? false,
             },

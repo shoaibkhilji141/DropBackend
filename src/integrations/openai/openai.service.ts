@@ -15,34 +15,43 @@ export interface OpenAICompletion {
 }
 
 /**
- * Thin OpenAI client. The API key is read from ConfigService and never leaves
- * this service. Callers in the AI module persist AIRequest rows around this.
+ * Chat-completions client. Uses Gemini, Groq, or OpenAI depending on which
+ * key is configured. Gemini and Groq speak the OpenAI protocol.
  */
 @Injectable()
 export class OpenAIService {
   private readonly logger = new Logger(OpenAIService.name);
   private client: OpenAI | null = null;
+  private clientKey = '';
 
   constructor(private readonly configService: ConfigService) {}
 
+  private config(): OpenAIConfig | undefined {
+    return this.configService.get<OpenAIConfig>('openai');
+  }
+
   isConfigured(): boolean {
-    return this.configService.get<OpenAIConfig>('openai')?.configured ?? false;
+    return this.config()?.configured ?? false;
   }
 
   defaultModel(): string {
-    return this.configService.get<OpenAIConfig>('openai')?.model ?? 'gpt-4o-mini';
+    return this.config()?.model ?? 'gemini-2.0-flash';
+  }
+
+  provider(): string {
+    return this.config()?.provider ?? 'openai';
   }
 
   async completeJson(system: string, user: string, model?: string): Promise<OpenAICompletion> {
-    const openai = this.configService.get<OpenAIConfig>('openai');
+    const openai = this.config();
     if (!openai?.configured || !openai.apiKey) {
       throw new ServiceUnavailableException(
-        'OpenAI is not configured. Set OPENAI_API_KEY in the backend environment.',
+        'No AI key is configured. Add GEMINI_API_KEY from https://aistudio.google.com/apikey (free) or GROQ_API_KEY / OPENAI_API_KEY.',
       );
     }
 
-    const usedModel = model || openai.model || 'gpt-4o-mini';
-    const client = this.getClient(openai.apiKey);
+    const usedModel = model || openai.model;
+    const client = this.getClient(openai);
 
     let completion: OpenAI.Chat.Completions.ChatCompletion;
     try {
@@ -56,13 +65,13 @@ export class OpenAIService {
         ],
       });
     } catch (error) {
-      this.logger.warn(`OpenAI request failed: ${error instanceof Error ? error.message : error}`);
-      throw new BadGatewayException(this.publicOpenAiError(error));
+      this.logger.warn(`AI request failed: ${error instanceof Error ? error.message : error}`);
+      throw new BadGatewayException(this.publicError(error, openai.provider));
     }
 
     const text = completion.choices[0]?.message?.content?.trim() ?? '';
     if (!text) {
-      throw new BadGatewayException('OpenAI returned an empty response.');
+      throw new BadGatewayException('The AI provider returned an empty response.');
     }
 
     return {
@@ -82,13 +91,13 @@ export class OpenAIService {
     } catch {
       // Fall through to a consistent invalid-response error.
     }
-    throw new BadGatewayException('OpenAI returned a response that was not valid JSON.');
+    throw new BadGatewayException('The AI provider returned a response that was not valid JSON.');
   }
 
   requireString(payload: Record<string, unknown>, key: string): string {
     const value = payload[key];
     if (typeof value !== 'string' || !value.trim()) {
-      throw new BadGatewayException(`OpenAI response is missing a valid "${key}" field.`);
+      throw new BadGatewayException(`AI response is missing a valid "${key}" field.`);
     }
     return value.trim();
   }
@@ -96,32 +105,38 @@ export class OpenAIService {
   requireStringArray(payload: Record<string, unknown>, key: string): string[] {
     const value = payload[key];
     if (!Array.isArray(value)) {
-      throw new BadGatewayException(`OpenAI response is missing a valid "${key}" array.`);
+      throw new BadGatewayException(`AI response is missing a valid "${key}" array.`);
     }
     const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
     if (items.length === 0) {
-      throw new BadGatewayException(`OpenAI response "${key}" array was empty.`);
+      throw new BadGatewayException(`AI response "${key}" array was empty.`);
     }
     return items.map((item) => item.trim());
   }
 
-  private getClient(apiKey: string): OpenAI {
-    if (!this.client) {
-      this.client = new OpenAI({ apiKey });
+  private getClient(config: OpenAIConfig): OpenAI {
+    const identity = `${config.provider}:${config.apiKey}:${config.baseUrl ?? ''}`;
+    if (!this.client || this.clientKey !== identity) {
+      this.client = new OpenAI({
+        apiKey: config.apiKey,
+        baseURL: config.baseUrl,
+      });
+      this.clientKey = identity;
     }
     return this.client;
   }
 
-  private publicOpenAiError(error: unknown): string {
+  private publicError(error: unknown, provider: string): string {
+    const name = provider === 'gemini' ? 'Gemini' : provider === 'groq' ? 'Groq' : 'OpenAI';
     if (error instanceof APIError) {
       const detail = error.message ?? '';
-      if (error.status === 401) return 'OpenAI rejected the configured API key.';
+      if (error.status === 401) return `${name} rejected the configured API key.`;
       if (error.status === 429 && /credit|quota|billing/i.test(detail)) {
-        return 'OpenAI has no credits remaining on the configured API key.';
+        return `${name} has no credits remaining. Switch to Gemini (free) at https://aistudio.google.com/apikey`;
       }
-      if (error.status === 429) return 'OpenAI rate limit reached. Try again shortly.';
-      return `OpenAI request failed (${error.status ?? 'unknown status'}).`;
+      if (error.status === 429) return `${name} rate limit reached. Try again shortly.`;
+      return `${name} request failed (${error.status ?? 'unknown status'}).`;
     }
-    return 'OpenAI request failed.';
+    return `${name} request failed.`;
   }
 }

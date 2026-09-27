@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AiListResultDto = exports.AiTextResultDto = exports.AiStatusDto = exports.GenerateAiContentDto = void 0;
+exports.AiListResultDto = exports.ListingCopyResultDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.GenerateAiContentDto = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
@@ -69,8 +69,9 @@ __decorate([
 class AiStatusDto {
     configured;
     model;
+    provider;
     static _OPENAPI_METADATA_FACTORY() {
-        return { configured: { required: true, type: () => Boolean }, model: { required: true, type: () => String } };
+        return { configured: { required: true, type: () => Boolean }, model: { required: true, type: () => String }, provider: { required: true, type: () => String } };
     }
 }
 exports.AiStatusDto = AiStatusDto;
@@ -82,6 +83,10 @@ __decorate([
     (0, swagger_1.ApiProperty)(),
     __metadata("design:type", String)
 ], AiStatusDto.prototype, "model", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], AiStatusDto.prototype, "provider", void 0);
 class AiTextResultDto {
     requestId;
     type;
@@ -113,6 +118,137 @@ __decorate([
     (0, swagger_1.ApiProperty)(),
     __metadata("design:type", Number)
 ], AiTextResultDto.prototype, "tokensUsed", void 0);
+class ListingFromUrlDto {
+    url;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { url: { required: true, type: () => String, maxLength: 500 } };
+    }
+}
+exports.ListingFromUrlDto = ListingFromUrlDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'AliExpress product page URL or numeric product id' }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(500),
+    __metadata("design:type", String)
+], ListingFromUrlDto.prototype, "url", void 0);
+class ListingCopySpecDto {
+    name;
+    value;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { name: { required: true, type: () => String }, value: { required: true, type: () => String } };
+    }
+}
+exports.ListingCopySpecDto = ListingCopySpecDto;
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopySpecDto.prototype, "name", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopySpecDto.prototype, "value", void 0);
+class ListingCopyProductDto {
+    externalId;
+    title;
+    images;
+    sourceUrl;
+    costPrice;
+    currency;
+    category;
+    suggestedSellPrice;
+    specs;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { externalId: { required: true, type: () => String }, title: { required: true, type: () => String }, images: { required: true, type: () => [String] }, sourceUrl: { required: true, type: () => String }, costPrice: { required: true, type: () => Number }, currency: { required: true, type: () => String }, category: { required: true, type: () => String }, suggestedSellPrice: { required: true, type: () => Number }, specs: { required: true, type: () => [require("./ai.dto").ListingCopySpecDto] } };
+    }
+}
+exports.ListingCopyProductDto = ListingCopyProductDto;
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyProductDto.prototype, "externalId", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyProductDto.prototype, "title", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingCopyProductDto.prototype, "images", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyProductDto.prototype, "sourceUrl", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Number)
+], ListingCopyProductDto.prototype, "costPrice", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyProductDto.prototype, "currency", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyProductDto.prototype, "category", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Number)
+], ListingCopyProductDto.prototype, "suggestedSellPrice", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [ListingCopySpecDto] }),
+    __metadata("design:type", Array)
+], ListingCopyProductDto.prototype, "specs", void 0);
+class ListingCopyResultDto {
+    requestId;
+    model;
+    tokensUsed;
+    title;
+    description;
+    specs;
+    keywords;
+    highlights;
+    product;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { requestId: { required: true, type: () => String }, model: { required: true, type: () => String }, tokensUsed: { required: true, type: () => Number }, title: { required: true, type: () => String }, description: { required: true, type: () => String }, specs: { required: true, type: () => [String] }, keywords: { required: true, type: () => [String] }, highlights: { required: true, type: () => [String] }, product: { required: true, type: () => require("./ai.dto").ListingCopyProductDto } };
+    }
+}
+exports.ListingCopyResultDto = ListingCopyResultDto;
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyResultDto.prototype, "requestId", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyResultDto.prototype, "model", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Number)
+], ListingCopyResultDto.prototype, "tokensUsed", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyResultDto.prototype, "title", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingCopyResultDto.prototype, "description", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingCopyResultDto.prototype, "specs", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingCopyResultDto.prototype, "keywords", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingCopyResultDto.prototype, "highlights", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: ListingCopyProductDto }),
+    __metadata("design:type", ListingCopyProductDto)
+], ListingCopyResultDto.prototype, "product", void 0);
 class AiListResultDto {
     requestId;
     type;

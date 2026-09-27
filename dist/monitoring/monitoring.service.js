@@ -16,7 +16,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MonitoringService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
+const demo_data_1 = require("../common/demo-data");
 const prisma_service_1 = require("../common/prisma/prisma.service");
+const integration_accounts_service_1 = require("../integrations/accounts/integration-accounts.service");
 const listings_service_1 = require("../listings/listings.service");
 const aliexpress_types_1 = require("../integrations/aliexpress/aliexpress.types");
 const round = (value) => Math.round(value * 100) / 100;
@@ -24,39 +26,69 @@ let MonitoringService = MonitoringService_1 = class MonitoringService {
     prisma;
     supplier;
     listings;
+    accounts;
     logger = new common_1.Logger(MonitoringService_1.name);
-    constructor(prisma, supplier, listings) {
+    constructor(prisma, supplier, listings, accounts) {
         this.prisma = prisma;
         this.supplier = supplier;
         this.listings = listings;
+        this.accounts = accounts;
+    }
+    async liveShop() {
+        const [ebay, aliexpress] = await Promise.all([
+            this.accounts.findConnected(client_1.Platform.EBAY),
+            this.accounts.findConnected(client_1.Platform.ALIEXPRESS),
+        ]);
+        return ((ebay?.status === client_1.LinkStatus.CONNECTED && !this.accounts.isExpired(ebay)) ||
+            (aliexpress?.status === client_1.LinkStatus.CONNECTED && !this.accounts.isExpired(aliexpress)));
     }
     async priceHistory(productId) {
+        const live = await this.liveShop();
         return this.prisma.priceHistory.findMany({
-            where: productId ? { productId } : undefined,
+            where: {
+                ...(productId ? { productId } : {}),
+                ...(live && !productId ? { product: (0, demo_data_1.liveProductWhere)() } : {}),
+            },
             orderBy: { recordedAt: 'desc' },
             take: 200,
             include: { product: { select: { title: true } } },
         });
     }
     async stockHistory(productId) {
+        const live = await this.liveShop();
         return this.prisma.stockHistory.findMany({
-            where: productId ? { productId } : undefined,
+            where: {
+                ...(productId ? { productId } : {}),
+                ...(live && !productId ? { product: (0, demo_data_1.liveProductWhere)() } : {}),
+            },
             orderBy: { recordedAt: 'desc' },
             take: 200,
             include: { product: { select: { title: true } } },
         });
     }
     async shippingHistory(productId) {
+        const live = await this.liveShop();
         return this.prisma.shippingHistory.findMany({
-            where: productId ? { productId } : undefined,
+            where: {
+                ...(productId ? { productId } : {}),
+                ...(live && !productId ? { product: (0, demo_data_1.liveProductWhere)() } : {}),
+            },
             orderBy: { recordedAt: 'desc' },
             take: 200,
             include: { product: { select: { title: true } } },
         });
     }
     async alerts(query = {}) {
+        const live = await this.liveShop();
         const rows = await this.prisma.alert.findMany({
-            where: query.unreadOnly ? { readAt: null } : undefined,
+            where: {
+                ...(query.unreadOnly ? { readAt: null } : {}),
+                ...(live
+                    ? {
+                        OR: [{ productId: null }, { product: (0, demo_data_1.liveProductWhere)() }],
+                    }
+                    : {}),
+            },
             include: { product: { select: { id: true, title: true } } },
             orderBy: { createdAt: 'desc' },
             take: 100,
@@ -85,8 +117,12 @@ let MonitoringService = MonitoringService_1 = class MonitoringService {
         return { count: result.count };
     }
     async rules(type) {
+        const live = await this.liveShop();
         const rows = await this.prisma.monitoringRule.findMany({
-            where: type ? { type } : undefined,
+            where: {
+                ...(type ? { type } : {}),
+                ...(live ? { product: (0, demo_data_1.liveProductWhere)() } : {}),
+            },
             include: { product: true },
             orderBy: { createdAt: 'desc' },
         });
@@ -458,9 +494,13 @@ let MonitoringService = MonitoringService_1 = class MonitoringService {
             },
         });
     }
-    loadRules(type) {
+    async loadRules(type) {
+        const live = await this.liveShop();
         return this.prisma.monitoringRule.findMany({
-            where: { type },
+            where: {
+                type,
+                ...(live ? { product: (0, demo_data_1.liveProductWhere)() } : {}),
+            },
             include: { product: true },
             orderBy: { updatedAt: 'desc' },
         });
@@ -496,6 +536,7 @@ exports.MonitoringService = MonitoringService;
 exports.MonitoringService = MonitoringService = MonitoringService_1 = __decorate([
     (0, common_1.Injectable)(),
     __param(1, (0, common_1.Inject)(aliexpress_types_1.SUPPLIER_PRODUCT_PROVIDER)),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService, Object, listings_service_1.ListingsService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService, Object, listings_service_1.ListingsService,
+        integration_accounts_service_1.IntegrationAccountsService])
 ], MonitoringService);
 //# sourceMappingURL=monitoring.service.js.map

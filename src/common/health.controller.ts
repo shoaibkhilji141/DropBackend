@@ -36,7 +36,7 @@ export class HealthController {
       integrations: {
         auth0: this.configService.get<Configuration['auth0']>('auth0')?.enabled ?? false,
         redis: Boolean(redisConfig?.enabled && (await this.redis.ping())),
-        openai: this.configService.get<Configuration['openai']>('openai')?.configured ?? false,
+        openai: Boolean(this.configService.get<Configuration['openai']>('openai')?.configured),
         ebay: this.configService.get<Configuration['ebay']>('ebay')?.configured ?? false,
         aliexpress:
           this.configService.get<Configuration['aliexpress']>('aliexpress')?.configured ?? false,

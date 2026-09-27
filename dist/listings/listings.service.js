@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ListingsService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
+const demo_data_1 = require("../common/demo-data");
 const json_1 = require("../common/json");
 const prisma_service_1 = require("../common/prisma/prisma.service");
 const ebay_service_1 = require("../integrations/ebay/ebay.service");
@@ -29,9 +30,12 @@ let ListingsService = class ListingsService {
         this.ebay = ebay;
         this.users = users;
     }
-    async findAll(query) {
+    async findAll(query, identity) {
+        const user = await this.users.findCurrent(identity);
+        const live = await this.ebay.isConnected(user.id);
         const listings = await this.prisma.listing.findMany({
             where: {
+                ...(live ? (0, demo_data_1.liveListingWhere)() : {}),
                 status: query.status,
                 ...(query.search ? { title: { contains: query.search } } : {}),
             },
@@ -171,6 +175,8 @@ let ListingsService = class ListingsService {
             sku: listing.sku,
             price: listing.price,
             quantity: listing.quantity,
+            soldCount: listing.soldCount,
+            ebayUrl: this.ebay.itemUrl(listing.externalId, listing.itemUrl),
             shippingMethod: listing.shippingMethod ?? listing.product?.shippingMethod ?? null,
             shippingCost: listing.shippingCost || listing.product?.shippingCost || 0,
             shippingEtaDays: listing.shippingEtaDays ?? listing.product?.shippingEtaDays ?? null,
@@ -190,6 +196,7 @@ let ListingsService = class ListingsService {
                     images: productImages.length > 0 ? productImages : listing.product.imageUrl ? [listing.product.imageUrl] : [],
                     costPrice: listing.product.costPrice,
                     shippingCost: listing.product.shippingCost,
+                    sourceUrl: listing.product.sourceUrl,
                     category: listing.product.category,
                     variants: listing.product.variants.map((variant) => ({
                         id: variant.id,

@@ -32,8 +32,8 @@ let ListingsController = class ListingsController {
     constructor(listingsService) {
         this.listingsService = listingsService;
     }
-    findAll(query) {
-        return this.listingsService.findAll(query);
+    findAll(query, user) {
+        return this.listingsService.findAll(query, user);
     }
     findOne(id) {
         return this.listingsService.findOne(id);
@@ -59,8 +59,9 @@ __decorate([
     (0, common_1.Get)(),
     openapi.ApiResponse({ status: 200, type: [Object] }),
     __param(0, (0, common_1.Query)()),
+    __param(1, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [listing_dto_1.ListListingsQueryDto]),
+    __metadata("design:paramtypes", [listing_dto_1.ListListingsQueryDto, Object]),
     __metadata("design:returntype", Promise)
 ], ListingsController.prototype, "findAll", null);
 __decorate([

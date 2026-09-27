@@ -182,12 +182,63 @@ let EbayService = EbayService_1 = class EbayService {
         const token = await this.accessToken(userId);
         await this.client.updatePriceQuantity(token, sku, price, quantity);
     }
-    async syncOrders(userId) {
+    async isConnected(userId) {
+        const account = await this.accounts.find(userId, client_1.Platform.EBAY);
+        return Boolean(account?.accessToken &&
+            account.status === client_1.LinkStatus.CONNECTED &&
+            !this.accounts.isExpired(account));
+    }
+    itemUrl(itemId, stored) {
+        if (!itemId)
+            return stored ?? null;
+        return this.client.itemUrl(itemId, stored);
+    }
+    async syncShop(userId) {
         const token = await this.accessToken(userId);
+        await this.purgeDemoCatalog();
+        let listingError = null;
+        let remote = [];
+        try {
+            remote = await this.client.listActiveListings(token);
+        }
+        catch (error) {
+            listingError = error instanceof Error ? error.message : 'Could not load eBay listings';
+            this.logger.warn(listingError);
+        }
+        let orderRemote = [];
+        try {
+            orderRemote = await this.client.listOrders(token);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not load eBay orders';
+            this.logger.warn(message);
+            listingError = [listingError, message].filter(Boolean).join(' ');
+        }
+        if (remote.length === 0) {
+            const fromOrders = this.listingsFromOrders(orderRemote);
+            if (fromOrders.length > 0) {
+                remote = fromOrders;
+                listingError = null;
+            }
+        }
+        else {
+            const sold = new Map();
+            for (const listing of this.listingsFromOrders(orderRemote)) {
+                sold.set(listing.itemId, listing.soldCount);
+            }
+            for (const listing of remote) {
+                listing.soldCount = Math.max(listing.soldCount, sold.get(listing.itemId) ?? 0);
+            }
+        }
+        const listingCount = remote.length > 0 ? await this.upsertSellerListings(userId, remote) : 0;
+        const orders = await this.syncOrders(userId, orderRemote);
+        return { listings: listingCount, orders, listingError };
+    }
+    async syncOrders(userId, prefetched) {
         const store = await this.prisma.store.findFirst({
             where: { userId, platform: client_1.Platform.EBAY },
         });
-        const remote = await this.client.listOrders(token);
+        const remote = prefetched ?? (await this.client.listOrders(await this.accessToken(userId)));
         let upserted = 0;
         for (const order of remote) {
             if (!order.externalId)
@@ -206,24 +257,24 @@ let EbayService = EbayService_1 = class EbayService {
                 currency: order.currency,
                 totalAmount: order.totalAmount,
                 placedAt: order.placedAt,
+                channel: 'EBAY',
                 lineItemData: JSON.stringify(order.items.map((item) => item.lineItemId).filter(Boolean)),
                 lastError: null,
             };
+            const items = await Promise.all(order.items.map((item) => this.linkedOrderItem(item)));
             if (existing) {
-                await this.prisma.order.update({ where: { id: existing.id }, data });
+                await this.prisma.orderItem.deleteMany({ where: { orderId: existing.id } });
+                await this.prisma.order.update({
+                    where: { id: existing.id },
+                    data: { ...data, items: { create: items } },
+                });
             }
             else {
                 await this.prisma.order.create({
                     data: {
                         ...data,
                         externalId: order.externalId,
-                        items: {
-                            create: order.items.map((item) => ({
-                                title: item.title,
-                                quantity: item.quantity,
-                                unitPrice: item.unitPrice,
-                            })),
-                        },
+                        items: { create: items },
                     },
                 });
             }
@@ -258,6 +309,140 @@ let EbayService = EbayService_1 = class EbayService {
             number: order.trackingCode,
             lineItemIds: ids,
         });
+    }
+    listingsFromOrders(orders) {
+        const grouped = new Map();
+        for (const order of orders) {
+            for (const item of order.items) {
+                if (!item.legacyItemId)
+                    continue;
+                const current = grouped.get(item.legacyItemId);
+                if (current) {
+                    current.soldCount += item.quantity;
+                    if (!current.images.length && item.imageUrl)
+                        current.images = [item.imageUrl];
+                    if (!current.price && item.unitPrice)
+                        current.price = item.unitPrice;
+                    continue;
+                }
+                grouped.set(item.legacyItemId, {
+                    itemId: item.legacyItemId,
+                    title: item.title,
+                    description: '',
+                    images: item.imageUrl ? [item.imageUrl] : [],
+                    price: item.unitPrice,
+                    currency: order.currency,
+                    quantity: 0,
+                    soldCount: item.quantity,
+                    sku: item.sku,
+                    itemUrl: this.client.itemUrl(item.legacyItemId) ?? '',
+                });
+            }
+        }
+        return [...grouped.values()].sort((a, b) => b.soldCount - a.soldCount);
+    }
+    async upsertSellerListings(userId, remote) {
+        const store = await this.prisma.store.findFirst({
+            where: { userId, platform: client_1.Platform.EBAY },
+        });
+        let upserted = 0;
+        for (const item of remote) {
+            const externalProductId = `ebay-item-${item.itemId}`;
+            const images = JSON.stringify(item.images);
+            const existingProduct = await this.prisma.product.findFirst({
+                where: { userId, externalId: externalProductId },
+            });
+            const product = existingProduct
+                ? await this.prisma.product.update({
+                    where: { id: existingProduct.id },
+                    data: {
+                        title: item.title,
+                        description: item.description || existingProduct.description,
+                        imageUrl: item.images[0] ?? existingProduct.imageUrl,
+                        images,
+                        category: item.category ?? existingProduct.category,
+                        currency: item.currency || existingProduct.currency,
+                        sellPrice: item.price,
+                        stock: item.quantity,
+                        ordersCount: item.soldCount,
+                        status: 'LISTED',
+                    },
+                })
+                : await this.prisma.product.create({
+                    data: {
+                        userId,
+                        externalId: externalProductId,
+                        title: item.title,
+                        description: item.description || null,
+                        imageUrl: item.images[0] ?? null,
+                        images,
+                        category: item.category,
+                        currency: item.currency || 'USD',
+                        sellPrice: item.price,
+                        stock: item.quantity,
+                        ordersCount: item.soldCount,
+                        status: 'LISTED',
+                    },
+                });
+            const existingListing = await this.prisma.listing.findFirst({
+                where: { externalId: item.itemId },
+            });
+            const listingData = {
+                productId: product.id,
+                storeId: store?.id ?? existingListing?.storeId,
+                title: item.title.slice(0, 80),
+                description: item.description || item.title,
+                images,
+                category: item.category,
+                sku: item.sku || item.itemId,
+                price: item.price,
+                quantity: item.quantity,
+                soldCount: item.soldCount,
+                itemUrl: item.itemUrl || this.client.itemUrl(item.itemId),
+                status: 'PUBLISHED',
+                publishedAt: existingListing?.publishedAt ?? new Date(),
+                lastError: null,
+            };
+            if (existingListing) {
+                await this.prisma.listing.update({ where: { id: existingListing.id }, data: listingData });
+            }
+            else {
+                await this.prisma.listing.create({
+                    data: { ...listingData, externalId: item.itemId },
+                });
+            }
+            upserted += 1;
+        }
+        return upserted;
+    }
+    async linkedOrderItem(item) {
+        const listing = item.legacyItemId
+            ? await this.prisma.listing.findFirst({
+                where: { externalId: item.legacyItemId },
+                select: { id: true, productId: true },
+            })
+            : null;
+        if (listing && item.imageUrl) {
+            const product = await this.prisma.product.findUnique({ where: { id: listing.productId } });
+            if (product && !product.imageUrl) {
+                await this.prisma.product.update({
+                    where: { id: product.id },
+                    data: { imageUrl: item.imageUrl, images: JSON.stringify([item.imageUrl]) },
+                });
+            }
+        }
+        return {
+            title: item.title,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            listingId: listing?.id,
+            productId: listing?.productId,
+        };
+    }
+    async purgeDemoCatalog() {
+        await this.prisma.order.deleteMany({ where: { externalId: { startsWith: 'EB-' } } });
+        await this.prisma.listing.deleteMany({ where: { externalId: { startsWith: 'ebay-' } } });
+        await this.prisma.product.deleteMany({ where: { externalId: { startsWith: 'ae-' } } });
     }
     mapOrderStatus(status) {
         const value = status.toUpperCase();

@@ -43,10 +43,14 @@ export interface AliExpressConfig {
   configured: boolean;
 }
 
+export type AiProviderName = 'gemini' | 'groq' | 'openai';
+
 export interface OpenAIConfig {
   apiKey: string;
   model: string;
   configured: boolean;
+  provider: AiProviderName;
+  baseUrl?: string;
 }
 
 export interface Configuration {
@@ -118,7 +122,50 @@ export const configuration = (): Configuration => {
     callbackUrl: str(process.env.ALIEXPRESS_CALLBACK_URL),
   };
 
+  const geminiKey = str(process.env.GEMINI_API_KEY);
+  const groqKey = str(process.env.GROQ_API_KEY);
   const openaiApiKey = str(process.env.OPENAI_API_KEY);
+  const requested = str(process.env.AI_PROVIDER).toLowerCase();
+  const ai =
+    requested === 'gemini' && geminiKey
+      ? {
+          provider: 'gemini' as const,
+          apiKey: geminiKey,
+          model: str(process.env.GEMINI_MODEL, 'gemini-2.0-flash'),
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+        }
+      : requested === 'groq' && groqKey
+        ? {
+            provider: 'groq' as const,
+            apiKey: groqKey,
+            model: str(process.env.GROQ_MODEL, 'llama-3.3-70b-versatile'),
+            baseUrl: 'https://api.groq.com/openai/v1',
+          }
+        : requested === 'openai' && openaiApiKey
+          ? {
+              provider: 'openai' as const,
+              apiKey: openaiApiKey,
+              model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
+            }
+          : geminiKey
+            ? {
+                provider: 'gemini' as const,
+                apiKey: geminiKey,
+                model: str(process.env.GEMINI_MODEL, 'gemini-2.0-flash'),
+                baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+              }
+            : groqKey
+              ? {
+                  provider: 'groq' as const,
+                  apiKey: groqKey,
+                  model: str(process.env.GROQ_MODEL, 'llama-3.3-70b-versatile'),
+                  baseUrl: 'https://api.groq.com/openai/v1',
+                }
+              : {
+                  provider: 'openai' as const,
+                  apiKey: openaiApiKey,
+                  model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
+                };
 
   return {
     app: {
@@ -152,9 +199,11 @@ export const configuration = (): Configuration => {
       configured: Boolean(aliexpress.appKey && aliexpress.appSecret),
     },
     openai: {
-      apiKey: openaiApiKey,
-      model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
-      configured: Boolean(openaiApiKey),
+      apiKey: ai.apiKey,
+      model: ai.model,
+      configured: Boolean(ai.apiKey),
+      provider: ai.provider,
+      baseUrl: 'baseUrl' in ai ? ai.baseUrl : undefined,
     },
   };
 };

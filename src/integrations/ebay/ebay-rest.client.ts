@@ -202,57 +202,36 @@ export class EbayRestClient {
   }
 
   async listActiveListings(accessToken: string): Promise<SellerListing[]> {
-    const listings: SellerListing[] = [];
-    const pageSize = 100;
-
-    for (let page = 1; page <= 3; page += 1) {
-      const xml = await this.trading(
-        accessToken,
-        'GetMyeBaySelling',
-        `<?xml version="1.0" encoding="utf-8"?>
-<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <ErrorLanguage>en_US</ErrorLanguage>
-  <WarningLevel>High</WarningLevel>
-  <DetailLevel>ReturnAll</DetailLevel>
-  <ActiveList>
-    <Include>true</Include>
-    <Sort>QuantitySold</Sort>
-    <Pagination>
-      <EntriesPerPage>${pageSize}</EntriesPerPage>
-      <PageNumber>${page}</PageNumber>
-    </Pagination>
-  </ActiveList>
-</GetMyeBaySellingRequest>`,
+    try {
+      const trading = await this.listFromTrading(accessToken);
+      if (trading.length > 0) return trading;
+    } catch (error) {
+      this.logger.warn(
+        `GetMyeBaySelling unavailable: ${error instanceof Error ? error.message : error}`,
       );
-
-      const ack = this.xmlTag(xml, 'Ack');
-      if (ack === 'Failure') {
-        throw new Error(this.xmlTag(xml, 'LongMessage') || this.xmlTag(xml, 'ShortMessage') || 'eBay GetMyeBaySelling failed');
-      }
-
-      const items = this.xmlBlocks(xml, 'Item');
-      for (const block of items) {
-        const mapped = this.mapSellerItem(block);
-        if (mapped) listings.push(mapped);
-      }
-
-      const pages = Number(this.xmlTag(xml, 'TotalNumberOfPages') || '1');
-      if (!Number.isFinite(pages) || page >= pages || items.length === 0) break;
     }
-
-    return listings;
+    return this.listFromInventory(accessToken);
   }
 
   async listOrders(accessToken: string, since?: Date): Promise<MarketplaceOrder[]> {
-    const from = (since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)).toISOString();
+    const from = (since ?? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)).toISOString();
     const filter = `creationdate:[${from}..]`;
-    const data = await this.request<{ orders?: Record<string, unknown>[] }>(
-      'GET',
-      `${this.hosts().api}/sell/fulfillment/v1/order?limit=50&filter=${encodeURIComponent(filter)}`,
-      accessToken,
-    );
-
-    return (data.orders ?? []).map((order) => this.mapOrder(order));
+    try {
+      const data = await this.request<{ orders?: Record<string, unknown>[] }>(
+        'GET',
+        `${this.hosts().api}/sell/fulfillment/v1/order?limit=200&filter=${encodeURIComponent(filter)}`,
+        accessToken,
+      );
+      return (data.orders ?? []).map((order) => this.mapOrder(order));
+    } catch (error) {
+      this.logger.warn(`Filtered order query failed: ${error instanceof Error ? error.message : error}`);
+      const data = await this.request<{ orders?: Record<string, unknown>[] }>(
+        'GET',
+        `${this.hosts().api}/sell/fulfillment/v1/order?limit=200`,
+        accessToken,
+      );
+      return (data.orders ?? []).map((order) => this.mapOrder(order));
+    }
   }
 
   async pushTracking(
@@ -379,6 +358,110 @@ export class EbayRestClient {
     throw new Error(
       'Could not resolve an eBay categoryId via Commerce Taxonomy API. Set a more specific listing category or grant taxonomy access.',
     );
+  }
+
+  private async listFromTrading(accessToken: string): Promise<SellerListing[]> {
+    const listings: SellerListing[] = [];
+    const pageSize = 100;
+
+    for (let page = 1; page <= 3; page += 1) {
+      const xml = await this.trading(
+        accessToken,
+        'GetMyeBaySelling',
+        `<?xml version="1.0" encoding="utf-8"?>
+<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <DetailLevel>ReturnAll</DetailLevel>
+  <ActiveList>
+    <Include>true</Include>
+    <Pagination>
+      <EntriesPerPage>${pageSize}</EntriesPerPage>
+      <PageNumber>${page}</PageNumber>
+    </Pagination>
+  </ActiveList>
+</GetMyeBaySellingRequest>`,
+      );
+
+      const ack = this.xmlTag(xml, 'Ack');
+      if (ack === 'Failure') {
+        throw new Error(
+          this.xmlTag(xml, 'LongMessage') || this.xmlTag(xml, 'ShortMessage') || 'eBay GetMyeBaySelling failed',
+        );
+      }
+
+      const items = this.xmlBlocks(xml, 'Item');
+      for (const block of items) {
+        const mapped = this.mapSellerItem(block);
+        if (mapped) listings.push(mapped);
+      }
+
+      const pages = Number(this.xmlTag(xml, 'TotalNumberOfPages') || '1');
+      if (!Number.isFinite(pages) || page >= pages || items.length === 0) break;
+    }
+
+    return listings;
+  }
+
+  private async listFromInventory(accessToken: string): Promise<SellerListing[]> {
+    const inventory = new Map<
+      string,
+      { title: string; description: string; images: string[]; quantity: number }
+    >();
+
+    for (let offset = 0; offset < 500; offset += 100) {
+      const data = await this.request<{
+        inventoryItems?: Record<string, unknown>[];
+      }>('GET', `${this.hosts().api}/sell/inventory/v1/inventory_item?limit=100&offset=${offset}`, accessToken);
+      const rows = data.inventoryItems ?? [];
+      for (const row of rows) {
+        const sku = String(row.sku ?? '');
+        if (!sku) continue;
+        const product = (row.product as Record<string, unknown> | undefined) ?? {};
+        const availability =
+          (row.availability as { shipToLocationAvailability?: { quantity?: number } } | undefined)
+            ?.shipToLocationAvailability;
+        const images = Array.isArray(product.imageUrls)
+          ? product.imageUrls.filter((url): url is string => typeof url === 'string' && url.startsWith('http'))
+          : [];
+        inventory.set(sku, {
+          title: String(product.title ?? sku),
+          description: String(product.description ?? ''),
+          images,
+          quantity: Number(availability?.quantity ?? 0),
+        });
+      }
+      if (rows.length < 100) break;
+    }
+
+    const offers = await this.request<{
+      offers?: Record<string, unknown>[];
+    }>('GET', `${this.hosts().api}/sell/inventory/v1/offer?limit=200`, accessToken).catch(() => ({ offers: [] }));
+
+    const listings: SellerListing[] = [];
+    for (const offer of offers.offers ?? []) {
+      const listing = (offer.listing as { listingId?: string; listingStatus?: string } | undefined) ?? {};
+      const itemId = String(listing.listingId ?? offer.listingId ?? '');
+      const status = String(listing.listingStatus ?? offer.status ?? 'PUBLISHED');
+      if (!itemId || /UNPUBLISHED|ENDED|WITHDRAWN|INACTIVE/i.test(status)) continue;
+      const sku = String(offer.sku ?? '');
+      const item = inventory.get(sku);
+      const price = (offer.pricingSummary as { price?: { value?: string; currency?: string } } | undefined)?.price;
+      listings.push({
+        itemId,
+        title: (item?.title || sku || itemId).slice(0, 80),
+        description: item?.description ?? '',
+        images: item?.images ?? [],
+        price: Number(price?.value ?? 0),
+        currency: price?.currency ?? this.currency(),
+        quantity: Number(offer.availableQuantity ?? item?.quantity ?? 0),
+        soldCount: 0,
+        sku: sku || undefined,
+        category: typeof offer.categoryId === 'string' ? offer.categoryId : undefined,
+        itemUrl: this.itemUrl(itemId) ?? '',
+      });
+    }
+    return listings;
   }
 
   private async trading(accessToken: string, callName: string, body: string): Promise<string> {

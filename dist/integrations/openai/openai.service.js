@@ -51,22 +51,29 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
     configService;
     logger = new common_1.Logger(OpenAIService_1.name);
     client = null;
+    clientKey = '';
     constructor(configService) {
         this.configService = configService;
     }
+    config() {
+        return this.configService.get('openai');
+    }
     isConfigured() {
-        return this.configService.get('openai')?.configured ?? false;
+        return this.config()?.configured ?? false;
     }
     defaultModel() {
-        return this.configService.get('openai')?.model ?? 'gpt-4o-mini';
+        return this.config()?.model ?? 'gemini-2.0-flash';
+    }
+    provider() {
+        return this.config()?.provider ?? 'openai';
     }
     async completeJson(system, user, model) {
-        const openai = this.configService.get('openai');
+        const openai = this.config();
         if (!openai?.configured || !openai.apiKey) {
-            throw new common_1.ServiceUnavailableException('OpenAI is not configured. Set OPENAI_API_KEY in the backend environment.');
+            throw new common_1.ServiceUnavailableException('No AI key is configured. Add GEMINI_API_KEY from https://aistudio.google.com/apikey (free) or GROQ_API_KEY / OPENAI_API_KEY.');
         }
-        const usedModel = model || openai.model || 'gpt-4o-mini';
-        const client = this.getClient(openai.apiKey);
+        const usedModel = model || openai.model;
+        const client = this.getClient(openai);
         let completion;
         try {
             completion = await client.chat.completions.create({
@@ -80,12 +87,12 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
             });
         }
         catch (error) {
-            this.logger.warn(`OpenAI request failed: ${error instanceof Error ? error.message : error}`);
-            throw new common_1.BadGatewayException(this.publicOpenAiError(error));
+            this.logger.warn(`AI request failed: ${error instanceof Error ? error.message : error}`);
+            throw new common_1.BadGatewayException(this.publicError(error, openai.provider));
         }
         const text = completion.choices[0]?.message?.content?.trim() ?? '';
         if (!text) {
-            throw new common_1.BadGatewayException('OpenAI returned an empty response.');
+            throw new common_1.BadGatewayException('The AI provider returned an empty response.');
         }
         return {
             text,
@@ -103,45 +110,51 @@ let OpenAIService = OpenAIService_1 = class OpenAIService {
         }
         catch {
         }
-        throw new common_1.BadGatewayException('OpenAI returned a response that was not valid JSON.');
+        throw new common_1.BadGatewayException('The AI provider returned a response that was not valid JSON.');
     }
     requireString(payload, key) {
         const value = payload[key];
         if (typeof value !== 'string' || !value.trim()) {
-            throw new common_1.BadGatewayException(`OpenAI response is missing a valid "${key}" field.`);
+            throw new common_1.BadGatewayException(`AI response is missing a valid "${key}" field.`);
         }
         return value.trim();
     }
     requireStringArray(payload, key) {
         const value = payload[key];
         if (!Array.isArray(value)) {
-            throw new common_1.BadGatewayException(`OpenAI response is missing a valid "${key}" array.`);
+            throw new common_1.BadGatewayException(`AI response is missing a valid "${key}" array.`);
         }
         const items = value.filter((item) => typeof item === 'string' && item.trim().length > 0);
         if (items.length === 0) {
-            throw new common_1.BadGatewayException(`OpenAI response "${key}" array was empty.`);
+            throw new common_1.BadGatewayException(`AI response "${key}" array was empty.`);
         }
         return items.map((item) => item.trim());
     }
-    getClient(apiKey) {
-        if (!this.client) {
-            this.client = new openai_1.default({ apiKey });
+    getClient(config) {
+        const identity = `${config.provider}:${config.apiKey}:${config.baseUrl ?? ''}`;
+        if (!this.client || this.clientKey !== identity) {
+            this.client = new openai_1.default({
+                apiKey: config.apiKey,
+                baseURL: config.baseUrl,
+            });
+            this.clientKey = identity;
         }
         return this.client;
     }
-    publicOpenAiError(error) {
+    publicError(error, provider) {
+        const name = provider === 'gemini' ? 'Gemini' : provider === 'groq' ? 'Groq' : 'OpenAI';
         if (error instanceof openai_1.APIError) {
             const detail = error.message ?? '';
             if (error.status === 401)
-                return 'OpenAI rejected the configured API key.';
+                return `${name} rejected the configured API key.`;
             if (error.status === 429 && /credit|quota|billing/i.test(detail)) {
-                return 'OpenAI has no credits remaining on the configured API key.';
+                return `${name} has no credits remaining. Switch to Gemini (free) at https://aistudio.google.com/apikey`;
             }
             if (error.status === 429)
-                return 'OpenAI rate limit reached. Try again shortly.';
-            return `OpenAI request failed (${error.status ?? 'unknown status'}).`;
+                return `${name} rate limit reached. Try again shortly.`;
+            return `${name} request failed (${error.status ?? 'unknown status'}).`;
         }
-        return 'OpenAI request failed.';
+        return `${name} request failed.`;
     }
 };
 exports.OpenAIService = OpenAIService;

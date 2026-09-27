@@ -13,6 +13,8 @@ exports.OrdersService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../common/prisma/prisma.service");
+const demo_data_1 = require("../common/demo-data");
+const aliexpress_api_provider_1 = require("../integrations/aliexpress/aliexpress-api.provider");
 const ebay_service_1 = require("../integrations/ebay/ebay.service");
 const profit_service_1 = require("../profit/profit.service");
 const users_service_1 = require("../users/users.service");
@@ -25,16 +27,22 @@ let OrdersService = class OrdersService {
     prisma;
     profit;
     ebay;
+    aliexpress;
     users;
-    constructor(prisma, profit, ebay, users) {
+    syncedAt = new Map();
+    constructor(prisma, profit, ebay, aliexpress, users) {
         this.prisma = prisma;
         this.profit = profit;
         this.ebay = ebay;
+        this.aliexpress = aliexpress;
         this.users = users;
     }
-    async findAll(query) {
+    async findAll(query, identity) {
+        const user = await this.users.findCurrent(identity);
+        const live = (await this.ebay.isConnected(user.id)) || (await this.aliexpress.hasLiveSession());
         const orders = await this.prisma.order.findMany({
             where: {
+                ...(live ? (0, demo_data_1.liveOrderWhere)() : {}),
                 status: query.status,
                 fulfillmentStatus: query.fulfillmentStatus,
                 ...(query.search
@@ -81,10 +89,46 @@ let OrdersService = class OrdersService {
         });
         return this.toView(order);
     }
-    async syncFromEbay(identity) {
+    async syncFromEbay(identity, force = true) {
+        return this.syncShops(identity, force);
+    }
+    async syncShops(identity, force = false) {
         const user = await this.users.findCurrent(identity);
-        const upserted = await this.ebay.syncOrders(user.id);
-        return { upserted };
+        const last = this.syncedAt.get(user.id) ?? 0;
+        if (!force && Date.now() - last < 90_000) {
+            return {
+                upserted: 0,
+                listings: 0,
+                aliexpressOrders: 0,
+                listingError: null,
+                aliexpressError: null,
+                skipped: true,
+            };
+        }
+        let listings = 0;
+        let upserted = 0;
+        let listingError = null;
+        if (await this.ebay.isConnected(user.id)) {
+            try {
+                const ebay = await this.ebay.syncShop(user.id);
+                listings = ebay.listings;
+                upserted = ebay.orders;
+                listingError = ebay.listingError;
+            }
+            catch (error) {
+                listingError = error instanceof Error ? error.message : 'eBay sync failed';
+            }
+        }
+        const aliexpress = await this.syncAliExpressOrders(user.id);
+        this.syncedAt.set(user.id, Date.now());
+        return {
+            upserted,
+            listings,
+            aliexpressOrders: aliexpress.upserted,
+            listingError,
+            aliexpressError: aliexpress.error,
+            skipped: false,
+        };
     }
     async pushTracking(id, identity) {
         const user = await this.users.findCurrent(identity);
@@ -109,6 +153,93 @@ let OrdersService = class OrdersService {
             _count: { _all: true },
         });
         return grouped.map((row) => ({ status: row.status, count: row._count._all }));
+    }
+    async syncAliExpressOrders(userId) {
+        if (!(await this.aliexpress.hasLiveSession())) {
+            return { upserted: 0, error: null };
+        }
+        let remote;
+        try {
+            remote = await this.aliexpress.listOrders();
+        }
+        catch (error) {
+            return {
+                upserted: 0,
+                error: error instanceof Error ? error.message : 'AliExpress order sync failed',
+            };
+        }
+        if (remote.error && remote.orders.length === 0) {
+            return { upserted: 0, error: remote.error };
+        }
+        let store = await this.prisma.store.findFirst({
+            where: { userId, platform: client_1.Platform.ALIEXPRESS },
+        });
+        if (!store) {
+            store = await this.prisma.store.create({
+                data: {
+                    userId,
+                    name: 'AliExpress',
+                    platform: client_1.Platform.ALIEXPRESS,
+                    status: 'CONNECTED',
+                },
+            });
+        }
+        let upserted = 0;
+        for (const order of remote.orders) {
+            if (!order.externalId)
+                continue;
+            const mapped = this.mapAliExpressStatus(order.status);
+            const data = {
+                storeId: store.id,
+                channel: 'ALIEXPRESS',
+                buyerName: order.buyerName || 'AliExpress order',
+                status: mapped.status,
+                fulfillmentStatus: mapped.fulfillment,
+                currency: order.currency || 'USD',
+                totalAmount: order.totalAmount,
+                supplierCost: order.totalAmount,
+                placedAt: order.placedAt,
+                lastError: null,
+            };
+            const existing = await this.prisma.order.findFirst({
+                where: { externalId: order.externalId, channel: 'ALIEXPRESS' },
+            });
+            const items = order.items.map((item) => ({
+                title: item.title,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                unitCost: item.unitPrice,
+            }));
+            if (existing) {
+                await this.prisma.orderItem.deleteMany({ where: { orderId: existing.id } });
+                await this.prisma.order.update({
+                    where: { id: existing.id },
+                    data: { ...data, items: { create: items } },
+                });
+            }
+            else {
+                await this.prisma.order.create({
+                    data: { ...data, externalId: order.externalId, items: { create: items } },
+                });
+            }
+            upserted += 1;
+        }
+        return { upserted, error: remote.error ?? null };
+    }
+    mapAliExpressStatus(status) {
+        const value = status.toUpperCase();
+        if (value.includes('FINISH'))
+            return { status: client_1.OrderStatus.DELIVERED, fulfillment: client_1.FulfillmentStatus.DELIVERED };
+        if (value.includes('WAIT_BUYER_ACCEPT')) {
+            return { status: client_1.OrderStatus.SHIPPED, fulfillment: client_1.FulfillmentStatus.SHIPPED };
+        }
+        if (value.includes('CANCEL') || value.includes('INVALID')) {
+            return { status: client_1.OrderStatus.CANCELLED, fulfillment: client_1.FulfillmentStatus.UNFULFILLED };
+        }
+        if (value.includes('PLACE_ORDER')) {
+            return { status: client_1.OrderStatus.PENDING, fulfillment: client_1.FulfillmentStatus.UNFULFILLED };
+        }
+        return { status: client_1.OrderStatus.PAID, fulfillment: client_1.FulfillmentStatus.PROCESSING };
     }
     async findRecord(id) {
         const order = await this.prisma.order.findUnique({
@@ -137,6 +268,7 @@ let OrdersService = class OrdersService {
         return {
             id: order.id,
             externalId: order.externalId,
+            channel: order.channel,
             buyerName: order.buyerName,
             buyer: {
                 name: order.buyerName,
@@ -176,6 +308,7 @@ exports.OrdersService = OrdersService = __decorate([
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         profit_service_1.ProfitService,
         ebay_service_1.EbayService,
+        aliexpress_api_provider_1.AliExpressApiProvider,
         users_service_1.UsersService])
 ], OrdersService);
 //# sourceMappingURL=orders.service.js.map

@@ -41,6 +41,7 @@ export class GenerateAiContentDto {
 export class AiStatusDto {
   @ApiProperty() configured: boolean;
   @ApiProperty() model: string;
+  @ApiProperty() provider: string;
 }
 
 export class AiTextResultDto {

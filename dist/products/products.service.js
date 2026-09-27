@@ -16,6 +16,8 @@ exports.ProductsService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../common/prisma/prisma.service");
+const demo_data_1 = require("../common/demo-data");
+const integration_accounts_service_1 = require("../integrations/accounts/integration-accounts.service");
 const aliexpress_types_1 = require("../integrations/aliexpress/aliexpress.types");
 const profit_service_1 = require("../profit/profit.service");
 const users_service_1 = require("../users/users.service");
@@ -43,11 +45,13 @@ let ProductsService = class ProductsService {
     prisma;
     users;
     profit;
+    accounts;
     supplier;
-    constructor(prisma, users, profit, supplier) {
+    constructor(prisma, users, profit, accounts, supplier) {
         this.prisma = prisma;
         this.users = users;
         this.profit = profit;
+        this.accounts = accounts;
         this.supplier = supplier;
     }
     async searchSupplier(query) {
@@ -180,8 +184,15 @@ let ProductsService = class ProductsService {
         return { id };
     }
     async findAll(query) {
+        const [ebay, aliexpress] = await Promise.all([
+            this.accounts.findConnected(client_1.Platform.EBAY),
+            this.accounts.findConnected(client_1.Platform.ALIEXPRESS),
+        ]);
+        const live = (ebay?.status === client_1.LinkStatus.CONNECTED && !this.accounts.isExpired(ebay)) ||
+            (aliexpress?.status === client_1.LinkStatus.CONNECTED && !this.accounts.isExpired(aliexpress));
         const products = await this.prisma.product.findMany({
             where: {
+                ...(live ? (0, demo_data_1.liveProductWhere)() : {}),
                 status: query.status,
                 ...(query.search ? { title: { contains: query.search } } : {}),
             },
@@ -294,9 +305,10 @@ let ProductsService = class ProductsService {
 exports.ProductsService = ProductsService;
 exports.ProductsService = ProductsService = __decorate([
     (0, common_1.Injectable)(),
-    __param(3, (0, common_1.Inject)(aliexpress_types_1.SUPPLIER_PRODUCT_PROVIDER)),
+    __param(4, (0, common_1.Inject)(aliexpress_types_1.SUPPLIER_PRODUCT_PROVIDER)),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         users_service_1.UsersService,
-        profit_service_1.ProfitService, Object])
+        profit_service_1.ProfitService,
+        integration_accounts_service_1.IntegrationAccountsService, Object])
 ], ProductsService);
 //# sourceMappingURL=products.service.js.map

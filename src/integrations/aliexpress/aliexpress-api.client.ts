@@ -212,35 +212,55 @@ export class AliExpressApiClient {
   }
 
   async search(accessToken: string, query: SupplierSearchQuery): Promise<SupplierSearchResult> {
-    if (!query.search?.trim()) {
+    const keyword = query.search?.trim();
+    if (!keyword) {
       const recommended = await this.recommend(accessToken);
       if (recommended.length > 0) {
         return { items: recommended, facets: { categories: [], suppliers: [] } };
       }
     }
 
-    const result = await this.call('aliexpress.ds.text.search', accessToken, {
-      keyWord: query.search?.trim() || 'best selling',
-      local: 'en_US',
-      countryCode: 'US',
-      currency: 'USD',
-      sortBy: this.mapSort(query.sort || (query.search ? undefined : 'ordersDesc')),
-      pageIndex: 1,
-      pageSize: 40,
-    });
-    if (!result.ok) {
-      throw new Error(
-        result.error ||
-          'AliExpress product search is not available for this application. Confirm Dropshipping API access for aliexpress.ds.text.search.',
-      );
+    const attempts: Record<string, string | number | boolean | undefined>[] = [
+      {
+        keyWord: keyword || 'best selling',
+        local: 'en_US',
+        countryCode: 'US',
+        currency: 'USD',
+        pageIndex: 1,
+        pageSize: 40,
+      },
+      {
+        keyWord: keyword || 'electronics',
+        local: 'en_US',
+        countryCode: 'US',
+        currency: 'USD',
+        sortBy: this.mapSort(query.sort),
+        pageIndex: 1,
+        pageSize: 40,
+      },
+    ];
+
+    let lastError = '';
+    for (const business of attempts) {
+      const result = await this.call('aliexpress.ds.text.search', accessToken, business);
+      const items = this.extractList(result.payload)
+        .map((row) => this.mapSearchRow(row))
+        .filter((item): item is SupplierProduct => item !== null);
+      if (items.length > 0) {
+        return { items, facets: { categories: [], suppliers: [] } };
+      }
+      if (!result.ok) lastError = result.error || lastError;
     }
-    const items = this.extractList(result.payload)
-      .map((row) => this.mapSearchRow(row))
-      .filter((item): item is SupplierProduct => item !== null);
-    return {
-      items,
-      facets: { categories: [], suppliers: [] },
-    };
+
+    const recommended = await this.recommend(accessToken);
+    if (recommended.length > 0) {
+      return { items: recommended, facets: { categories: [], suppliers: [] } };
+    }
+
+    throw new Error(
+      lastError ||
+        'AliExpress product search returned no products. Confirm Dropshipping API access for aliexpress.ds.text.search.',
+    );
   }
 
   async getProduct(accessToken: string, externalId: string): Promise<SupplierProduct | null> {
@@ -283,15 +303,43 @@ export class AliExpressApiClient {
     const start = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const pad = (value: number) => String(value).padStart(2, '0');
     const stamp = `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}-${pad(start.getUTCDate())} ${pad(start.getUTCHours())}:${pad(start.getUTCMinutes())}:${pad(start.getUTCSeconds())}`;
-    const result = await this.call('aliexpress.trade.seller.orderlist.get', accessToken, {
-      param_aeop_order_query: JSON.stringify({
-        current_page: 1,
-        page_size: 50,
-        create_date_start: stamp,
-      }),
-    });
-    if (!result.ok) {
-      return { orders: [], error: result.error || 'AliExpress order list is not available for this account.' };
+    const attempts = [
+      {
+        method: 'aliexpress.trade.buyer.orderlist.get',
+        body: {
+          param_order_list_request: JSON.stringify({
+            current_page: 1,
+            page_size: 50,
+            create_date_start: stamp,
+          }),
+        },
+      },
+      {
+        method: 'aliexpress.trade.seller.orderlist.get',
+        body: {
+          param_aeop_order_query: JSON.stringify({
+            current_page: 1,
+            page_size: 50,
+            create_date_start: stamp,
+          }),
+        },
+      },
+    ];
+
+    let lastError = '';
+    let result: AliExpressCallResult | null = null;
+    for (const attempt of attempts) {
+      result = await this.call(attempt.method, accessToken, attempt.body);
+      if (result.ok) break;
+      lastError = result.error || lastError;
+    }
+    if (!result?.ok) {
+      return {
+        orders: [],
+        error:
+          lastError ||
+          'This AliExpress app is not allowed to list orders. eBay sales still sync; grant buyer/seller order APIs in the AliExpress open console.',
+      };
     }
 
     const seen = new Set<string>();
@@ -319,18 +367,21 @@ export class AliExpressApiClient {
   }
 
   private async recommend(accessToken: string): Promise<SupplierProduct[]> {
-    const result = await this.call('aliexpress.ds.recommend.feed.get', accessToken, {
-      page_no: 1,
-      page_size: 40,
-      country: 'US',
-      target_currency: 'USD',
-      target_language: 'EN',
-      feed_name: 'DS_bestselling',
-    });
-    if (!result.ok) return [];
-    return this.extractList(result.payload)
-      .map((row) => this.mapSearchRow(row))
-      .filter((item): item is SupplierProduct => item !== null);
+    for (const feedName of ['DS_bestselling', 'bestselling', 'AE_Hot_Product']) {
+      const result = await this.call('aliexpress.ds.recommend.feed.get', accessToken, {
+        page_no: 1,
+        page_size: 40,
+        country: 'US',
+        target_currency: 'USD',
+        target_language: 'EN',
+        feed_name: feedName,
+      });
+      const items = this.extractList(result.payload)
+        .map((row) => this.mapSearchRow(row))
+        .filter((item): item is SupplierProduct => item !== null);
+      if (items.length > 0) return items;
+    }
+    return [];
   }
 
   private sign(params: Record<string, string>, secret: string): string {
@@ -363,12 +414,14 @@ export class AliExpressApiClient {
       return error.sub_msg || error.msg || error.code;
     }
     const code = payload.code != null ? String(payload.code) : '';
+    const success = code === '' || code === '0' || code === '00' || code === '200';
     const message = [payload.error_msg, payload.error_message, payload.message, payload.msg, payload.error_code]
       .filter((item): item is string => typeof item === 'string' && item.length > 0 && item !== 'error_code')
       .join(': ');
-    if (message && code && code !== '0') return `${code}: ${message}`;
+    if (success) return undefined;
+    if (message && code) return `${code}: ${message}`;
     if (message && !payload.access_token) return message;
-    if (code && code !== '0' && !payload.access_token) return `AliExpress error ${code}`;
+    if (code && !payload.access_token) return `AliExpress error ${code}`;
     return undefined;
   }
 

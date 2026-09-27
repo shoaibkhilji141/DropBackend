@@ -24,8 +24,8 @@ let OrdersController = class OrdersController {
     constructor(ordersService) {
         this.ordersService = ordersService;
     }
-    findAll(query) {
-        return this.ordersService.findAll(query);
+    findAll(query, user) {
+        return this.ordersService.findAll(query, user);
     }
     summary() {
         return this.ordersService.summary();
@@ -48,8 +48,9 @@ __decorate([
     (0, common_1.Get)(),
     openapi.ApiResponse({ status: 200, type: [Object] }),
     __param(0, (0, common_1.Query)()),
+    __param(1, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [order_dto_1.ListOrdersQueryDto]),
+    __metadata("design:paramtypes", [order_dto_1.ListOrdersQueryDto, Object]),
     __metadata("design:returntype", Promise)
 ], OrdersController.prototype, "findAll", null);
 __decorate([

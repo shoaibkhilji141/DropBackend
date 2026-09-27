@@ -31,6 +31,7 @@ export class AiService {
     return {
       configured: this.openai.isConfigured(),
       model: this.openai.defaultModel(),
+      provider: this.openai.provider(),
     };
   }
 

@@ -194,7 +194,7 @@ export class EbayRestClient {
           {
             sku: this.sanitizeSku(sku),
             shipToLocationAvailability: { quantity: Math.max(quantity, 0) },
-            offers: [{ price: { currency: 'USD', value: price.toFixed(2) } }],
+            offers: [{ price: { currency: this.currency(), value: price.toFixed(2) } }],
           },
         ],
       },

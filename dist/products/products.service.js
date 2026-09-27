@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../common/prisma/prisma.service");
 const demo_data_1 = require("../common/demo-data");
+const html_1 = require("../common/html");
 const integration_accounts_service_1 = require("../integrations/accounts/integration-accounts.service");
 const aliexpress_types_1 = require("../integrations/aliexpress/aliexpress.types");
 const profit_service_1 = require("../profit/profit.service");
@@ -143,7 +144,7 @@ let ProductsService = class ProductsService {
                 supplierId: supplier.id,
                 externalId: source.externalId,
                 title: source.title,
-                description: source.description,
+                description: (0, html_1.htmlToPlainText)(source.description),
                 imageUrl: source.images[0],
                 images: JSON.stringify(source.images),
                 sourceUrl: source.sourceUrl,
@@ -208,7 +209,10 @@ let ProductsService = class ProductsService {
         await this.findRecord(id);
         const updated = await this.prisma.product.update({
             where: { id },
-            data: dto,
+            data: {
+                ...dto,
+                ...(dto.description != null ? { description: (0, html_1.htmlToPlainText)(dto.description) } : {}),
+            },
             include: { variants: true, supplier: true },
         });
         return this.toView(updated);
@@ -232,7 +236,7 @@ let ProductsService = class ProductsService {
             id: product.id,
             externalId: product.externalId,
             title: product.title,
-            description: product.description,
+            description: (0, html_1.htmlToPlainText)(product.description),
             images: parseImages(product.images, product.imageUrl),
             sourceUrl: product.sourceUrl,
             category: product.category,

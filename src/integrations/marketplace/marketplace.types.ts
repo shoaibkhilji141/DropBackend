@@ -62,6 +62,9 @@ export interface MarketplaceOrder {
   currency: string;
   totalAmount: number;
   placedAt: Date;
+  shopName?: string;
+  trackingCode?: string;
+  trackingCarrier?: string;
   items: MarketplaceOrderItem[];
 }
 

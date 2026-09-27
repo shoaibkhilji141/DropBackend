@@ -24,7 +24,7 @@ const FALLBACK_SETTINGS: ProfitSettingsDto = {
   fixedFee: 0.3,
   additionalCosts: 0,
   defaultMarkupMultiplier: 2.6,
-  currency: 'USD',
+  currency: 'GBP',
 };
 
 export interface ProductEstimate {
@@ -44,7 +44,12 @@ export class ProfitService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit(): Promise<void> {
-    this.cachedSettings = await this.readSettings();
+    const current = await this.readSettings();
+    if (current.currency === 'USD') {
+      this.cachedSettings = await this.updateSettings({ currency: 'GBP' });
+      return;
+    }
+    this.cachedSettings = current;
   }
 
   async getSettings(): Promise<ProfitSettingsDto> {

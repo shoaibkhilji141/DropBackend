@@ -41,8 +41,8 @@ export class AliExpressApiProvider implements SupplierProductProvider {
     if (tokens.accessToken) {
       const probe = await this.client.call('aliexpress.ds.product.get', tokens.accessToken, {
         product_id: '0',
-        ship_to_country: 'US',
-        target_currency: 'USD',
+        ship_to_country: 'GB',
+        target_currency: 'GBP',
         target_language: 'EN',
       });
       if (!probe.error || !/isv\.permission|insufficient|not authorized/i.test(probe.error)) {
@@ -50,9 +50,9 @@ export class AliExpressApiProvider implements SupplierProductProvider {
       }
       const searchProbe = await this.client.call('aliexpress.ds.text.search', tokens.accessToken, {
         keyWord: 'phone',
-        local: 'en_US',
-        countryCode: 'US',
-        currency: 'USD',
+        local: 'en_GB',
+        countryCode: 'GB',
+        currency: 'GBP',
         pageIndex: 1,
         pageSize: 1,
       });

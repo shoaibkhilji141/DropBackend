@@ -459,7 +459,7 @@ exports.LOCAL_SUPPLIER_CATALOG = ENTRIES.map((entry) => ({
     description: entry.description,
     images: imagesFor(entry.title, 3),
     sourceUrl: `https://www.aliexpress.com/item/${entry.id}.html`,
-    currency: 'USD',
+    currency: 'GBP',
     costPrice: entry.costPrice,
     shippingCost: entry.shippingCost,
     stock: entry.stock,

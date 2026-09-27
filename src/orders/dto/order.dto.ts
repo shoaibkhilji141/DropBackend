@@ -17,6 +17,11 @@ export class ListOrdersQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ description: 'EBAY sales or ALIEXPRESS purchase history' })
+  @IsOptional()
+  @IsString()
+  channel?: string;
 }
 
 export class UpdateOrderDto {

@@ -409,7 +409,7 @@ export class EbayService {
               imageUrl: item.images[0] ?? null,
               images,
               category: item.category,
-              currency: item.currency || 'USD',
+              currency: item.currency || 'GBP',
               sellPrice: item.price,
               stock: item.quantity,
               ordersCount: item.soldCount,

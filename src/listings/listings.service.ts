@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Listing, ListingStatus, Prisma } from '@prisma/client';
 import { liveListingWhere } from '../common/demo-data';
+import { htmlToPlainText } from '../common/html';
 import { parseStringArray, stringifyStringArray } from '../common/json';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EbayService } from '../integrations/ebay/ebay.service';
@@ -63,7 +64,7 @@ export class ListingsService {
         productId: dto.productId,
         storeId: store?.id ?? null,
         title: dto.title.slice(0, 80),
-        description: dto.description ?? product.description,
+        description: htmlToPlainText(dto.description ?? product.description),
         images: stringifyStringArray(dto.images ?? fallbackImages),
         category: dto.category ?? product.category,
         sku: dto.sku ?? product.variants.find((variant) => variant.sku)?.sku ?? product.externalId,
@@ -94,7 +95,7 @@ export class ListingsService {
       where: { id },
       data: {
         title: dto.title !== undefined ? dto.title.slice(0, 80) : undefined,
-        description: dto.description,
+        description: dto.description !== undefined ? htmlToPlainText(dto.description) : undefined,
         images: dto.images !== undefined ? stringifyStringArray(dto.images) : undefined,
         category: dto.category,
         sku: dto.sku,
@@ -184,7 +185,7 @@ export class ListingsService {
       productId: listing.productId,
       externalId: listing.externalId,
       title: listing.title,
-      description: listing.description,
+      description: htmlToPlainText(listing.description),
       images,
       category: listing.category ?? listing.product?.category ?? null,
       sku: listing.sku,

@@ -18,8 +18,9 @@ class ListOrdersQueryDto {
     status;
     fulfillmentStatus;
     search;
+    channel;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, search: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, search: { required: false, type: () => String }, channel: { required: false, type: () => String } };
     }
 }
 exports.ListOrdersQueryDto = ListOrdersQueryDto;
@@ -41,6 +42,12 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], ListOrdersQueryDto.prototype, "search", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'EBAY sales or ALIEXPRESS purchase history' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], ListOrdersQueryDto.prototype, "channel", void 0);
 class UpdateOrderDto {
     status;
     fulfillmentStatus;
@@ -52,7 +59,7 @@ class UpdateOrderDto {
     buyerCity;
     buyerCountry;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, buyerName: { required: false, type: () => String }, buyerEmail: { required: false, type: () => String }, buyerAddress: { required: false, type: () => String }, buyerCity: { required: false, type: () => String }, buyerCountry: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, buyerName: { required: false, type: () => String }, buyerEmail: { required: false, type: () => String }, buyerAddress: { required: false, type: () => String }, buyerCity: { required: false, type: () => String }, buyerCountry: { required: false, type: () => String } };
     }
 }
 exports.UpdateOrderDto = UpdateOrderDto;

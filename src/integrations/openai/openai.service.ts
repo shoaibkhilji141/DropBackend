@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI, { APIError } from 'openai';
-import { OpenAIConfig } from '../../config/configuration';
+import { AiProviderConfig, OpenAIConfig } from '../../config/configuration';
 
 export interface OpenAICompletion {
   text: string;
@@ -15,14 +15,13 @@ export interface OpenAICompletion {
 }
 
 /**
- * Chat-completions client. Uses Gemini, Groq, or OpenAI depending on which
- * key is configured. Gemini and Groq speak the OpenAI protocol.
+ * Tries OpenAI first, then Groq, then Gemini. A quota or auth failure on one
+ * provider does not stop listing copy if another key is configured.
  */
 @Injectable()
 export class OpenAIService {
   private readonly logger = new Logger(OpenAIService.name);
-  private client: OpenAI | null = null;
-  private clientKey = '';
+  private readonly clients = new Map<string, OpenAI>();
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -35,50 +34,34 @@ export class OpenAIService {
   }
 
   defaultModel(): string {
-    return this.config()?.model ?? 'gemini-2.0-flash';
+    return this.config()?.model ?? 'gpt-4o-mini';
   }
 
   provider(): string {
-    return this.config()?.provider ?? 'openai';
+    const names = this.config()?.providers.map((item) => item.name) ?? [];
+    return names.length > 1 ? `auto (${names.join(' → ')})` : (this.config()?.provider ?? 'openai');
   }
 
   async completeJson(system: string, user: string, model?: string): Promise<OpenAICompletion> {
     const openai = this.config();
-    if (!openai?.configured || !openai.apiKey) {
+    const providers = openai?.providers ?? [];
+    if (!openai?.configured || providers.length === 0) {
       throw new ServiceUnavailableException(
         'No AI key is configured. Add GEMINI_API_KEY from https://aistudio.google.com/apikey (free) or GROQ_API_KEY / OPENAI_API_KEY.',
       );
     }
 
-    const usedModel = model || openai.model;
-    const client = this.getClient(openai);
-
-    let completion: OpenAI.Chat.Completions.ChatCompletion;
-    try {
-      completion = await client.chat.completions.create({
-        model: usedModel,
-        temperature: 0.6,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      });
-    } catch (error) {
-      this.logger.warn(`AI request failed: ${error instanceof Error ? error.message : error}`);
-      throw new BadGatewayException(this.publicError(error, openai.provider));
+    let lastError = '';
+    for (const provider of providers) {
+      try {
+        return await this.completeWith(provider, system, user, model);
+      } catch (error) {
+        lastError = this.publicError(error, provider.name);
+        this.logger.warn(`${provider.name} failed, trying the next AI provider: ${lastError}`);
+      }
     }
 
-    const text = completion.choices[0]?.message?.content?.trim() ?? '';
-    if (!text) {
-      throw new BadGatewayException('The AI provider returned an empty response.');
-    }
-
-    return {
-      text,
-      model: completion.model ?? usedModel,
-      tokensUsed: completion.usage?.total_tokens ?? 0,
-    };
+    throw new BadGatewayException(lastError || 'All configured AI providers failed.');
   }
 
   parseJsonObject(text: string): Record<string, unknown> {
@@ -114,16 +97,45 @@ export class OpenAIService {
     return items.map((item) => item.trim());
   }
 
-  private getClient(config: OpenAIConfig): OpenAI {
-    const identity = `${config.provider}:${config.apiKey}:${config.baseUrl ?? ''}`;
-    if (!this.client || this.clientKey !== identity) {
-      this.client = new OpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl,
-      });
-      this.clientKey = identity;
+  private async completeWith(
+    provider: AiProviderConfig,
+    system: string,
+    user: string,
+    model?: string,
+  ): Promise<OpenAICompletion> {
+    const usedModel = model && provider.name === 'openai' ? model : provider.model;
+    const completion = await this.getClient(provider).chat.completions.create({
+      model: usedModel,
+      temperature: 0.6,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    });
+
+    const text = completion.choices[0]?.message?.content?.trim() ?? '';
+    if (!text) {
+      throw new Error('The AI provider returned an empty response.');
     }
-    return this.client;
+
+    return {
+      text,
+      model: `${provider.name}:${completion.model ?? usedModel}`,
+      tokensUsed: completion.usage?.total_tokens ?? 0,
+    };
+  }
+
+  private getClient(provider: AiProviderConfig): OpenAI {
+    const identity = `${provider.name}:${provider.apiKey}:${provider.baseUrl ?? ''}`;
+    const existing = this.clients.get(identity);
+    if (existing) return existing;
+    const client = new OpenAI({
+      apiKey: provider.apiKey,
+      baseURL: provider.baseUrl,
+    });
+    this.clients.set(identity, client);
+    return client;
   }
 
   private publicError(error: unknown, provider: string): string {
@@ -132,11 +144,11 @@ export class OpenAIService {
       const detail = error.message ?? '';
       if (error.status === 401) return `${name} rejected the configured API key.`;
       if (error.status === 429 && /credit|quota|billing/i.test(detail)) {
-        return `${name} has no credits remaining. Switch to Gemini (free) at https://aistudio.google.com/apikey`;
+        return `${name} has no credits remaining.`;
       }
-      if (error.status === 429) return `${name} rate limit reached. Try again shortly.`;
+      if (error.status === 429) return `${name} rate limit reached.`;
       return `${name} request failed (${error.status ?? 'unknown status'}).`;
     }
-    return `${name} request failed.`;
+    return error instanceof Error ? error.message : `${name} request failed.`;
   }
 }

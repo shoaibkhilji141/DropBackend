@@ -51,46 +51,35 @@ const configuration = () => {
     const geminiKey = str(process.env.GEMINI_API_KEY);
     const groqKey = str(process.env.GROQ_API_KEY);
     const openaiApiKey = str(process.env.OPENAI_API_KEY);
-    const requested = str(process.env.AI_PROVIDER).toLowerCase();
-    const ai = requested === 'gemini' && geminiKey
-        ? {
-            provider: 'gemini',
+    const allProviders = [];
+    if (openaiApiKey) {
+        allProviders.push({
+            name: 'openai',
+            apiKey: openaiApiKey,
+            model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
+        });
+    }
+    if (groqKey) {
+        allProviders.push({
+            name: 'groq',
+            apiKey: groqKey,
+            model: str(process.env.GROQ_MODEL, 'llama-3.3-70b-versatile'),
+            baseUrl: 'https://api.groq.com/openai/v1',
+        });
+    }
+    if (geminiKey) {
+        allProviders.push({
+            name: 'gemini',
             apiKey: geminiKey,
             model: str(process.env.GEMINI_MODEL, 'gemini-2.0-flash'),
             baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-        }
-        : requested === 'groq' && groqKey
-            ? {
-                provider: 'groq',
-                apiKey: groqKey,
-                model: str(process.env.GROQ_MODEL, 'llama-3.3-70b-versatile'),
-                baseUrl: 'https://api.groq.com/openai/v1',
-            }
-            : requested === 'openai' && openaiApiKey
-                ? {
-                    provider: 'openai',
-                    apiKey: openaiApiKey,
-                    model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
-                }
-                : geminiKey
-                    ? {
-                        provider: 'gemini',
-                        apiKey: geminiKey,
-                        model: str(process.env.GEMINI_MODEL, 'gemini-2.0-flash'),
-                        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-                    }
-                    : groqKey
-                        ? {
-                            provider: 'groq',
-                            apiKey: groqKey,
-                            model: str(process.env.GROQ_MODEL, 'llama-3.3-70b-versatile'),
-                            baseUrl: 'https://api.groq.com/openai/v1',
-                        }
-                        : {
-                            provider: 'openai',
-                            apiKey: openaiApiKey,
-                            model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
-                        };
+        });
+    }
+    const ai = allProviders[0] ?? {
+        name: 'openai',
+        apiKey: '',
+        model: str(process.env.OPENAI_MODEL, 'gpt-4o-mini'),
+    };
     return {
         app: {
             nodeEnv: str(process.env.NODE_ENV, 'development'),
@@ -122,9 +111,10 @@ const configuration = () => {
         openai: {
             apiKey: ai.apiKey,
             model: ai.model,
-            configured: Boolean(ai.apiKey),
-            provider: ai.provider,
-            baseUrl: 'baseUrl' in ai ? ai.baseUrl : undefined,
+            configured: allProviders.length > 0,
+            provider: ai.name,
+            baseUrl: ai.baseUrl,
+            providers: allProviders,
         },
     };
 };

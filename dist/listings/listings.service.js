@@ -13,6 +13,7 @@ exports.ListingsService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const demo_data_1 = require("../common/demo-data");
+const html_1 = require("../common/html");
 const json_1 = require("../common/json");
 const prisma_service_1 = require("../common/prisma/prisma.service");
 const ebay_service_1 = require("../integrations/ebay/ebay.service");
@@ -66,7 +67,7 @@ let ListingsService = class ListingsService {
                 productId: dto.productId,
                 storeId: store?.id ?? null,
                 title: dto.title.slice(0, 80),
-                description: dto.description ?? product.description,
+                description: (0, html_1.htmlToPlainText)(dto.description ?? product.description),
                 images: (0, json_1.stringifyStringArray)(dto.images ?? fallbackImages),
                 category: dto.category ?? product.category,
                 sku: dto.sku ?? product.variants.find((variant) => variant.sku)?.sku ?? product.externalId,
@@ -93,7 +94,7 @@ let ListingsService = class ListingsService {
             where: { id },
             data: {
                 title: dto.title !== undefined ? dto.title.slice(0, 80) : undefined,
-                description: dto.description,
+                description: dto.description !== undefined ? (0, html_1.htmlToPlainText)(dto.description) : undefined,
                 images: dto.images !== undefined ? (0, json_1.stringifyStringArray)(dto.images) : undefined,
                 category: dto.category,
                 sku: dto.sku,
@@ -169,7 +170,7 @@ let ListingsService = class ListingsService {
             productId: listing.productId,
             externalId: listing.externalId,
             title: listing.title,
-            description: listing.description,
+            description: (0, html_1.htmlToPlainText)(listing.description),
             images,
             category: listing.category ?? listing.product?.category ?? null,
             sku: listing.sku,

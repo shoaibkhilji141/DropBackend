@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { LinkStatus, Platform, Product, ProductStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { liveProductWhere } from '../common/demo-data';
+import { htmlToPlainText } from '../common/html';
 import { IntegrationAccountsService } from '../integrations/accounts/integration-accounts.service';
 import {
   SUPPLIER_PRODUCT_PROVIDER,
@@ -164,7 +165,7 @@ export class ProductsService {
         supplierId: supplier.id,
         externalId: source.externalId,
         title: source.title,
-        description: source.description,
+        description: htmlToPlainText(source.description),
         imageUrl: source.images[0],
         images: JSON.stringify(source.images),
         sourceUrl: source.sourceUrl,
@@ -242,7 +243,10 @@ export class ProductsService {
     await this.findRecord(id);
     const updated = await this.prisma.product.update({
       where: { id },
-      data: dto,
+      data: {
+        ...dto,
+        ...(dto.description != null ? { description: htmlToPlainText(dto.description) } : {}),
+      },
       include: { variants: true, supplier: true },
     });
     return this.toView(updated);
@@ -270,7 +274,7 @@ export class ProductsService {
       id: product.id,
       externalId: product.externalId,
       title: product.title,
-      description: product.description,
+      description: htmlToPlainText(product.description),
       images: parseImages(product.images, product.imageUrl),
       sourceUrl: product.sourceUrl,
       category: product.category,

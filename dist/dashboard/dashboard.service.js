@@ -120,7 +120,7 @@ let DashboardService = DashboardService_1 = class DashboardService {
                     title: listing.title,
                     imageUrl: images[0] ?? null,
                     price: listing.price,
-                    currency: listing.product?.currency || 'USD',
+                    currency: listing.product?.currency || 'GBP',
                     soldCount: listing.soldCount,
                     ebayUrl: this.ebay.itemUrl(listing.externalId, listing.itemUrl),
                     sourceUrl: listing.product?.sourceUrl ?? null,

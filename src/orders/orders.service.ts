@@ -45,6 +45,7 @@ export class OrdersService {
     const orders = await this.prisma.order.findMany({
       where: {
         ...(live ? liveOrderWhere() : {}),
+        ...(query.channel ? { channel: query.channel } : {}),
         status: query.status,
         fulfillmentStatus: query.fulfillmentStatus,
         ...(query.search
@@ -206,12 +207,14 @@ export class OrdersService {
       const data = {
         storeId: store.id,
         channel: 'ALIEXPRESS',
-        buyerName: order.buyerName || 'AliExpress order',
+        buyerName: order.shopName || order.buyerName || 'AliExpress shop',
         status: mapped.status,
         fulfillmentStatus: mapped.fulfillment,
-        currency: order.currency || 'USD',
+        currency: order.currency || 'GBP',
         totalAmount: order.totalAmount,
         supplierCost: order.totalAmount,
+        trackingCode: order.trackingCode,
+        trackingCarrier: order.trackingCarrier,
         placedAt: order.placedAt,
         lastError: null,
       };
@@ -292,6 +295,7 @@ export class OrdersService {
       id: order.id,
       externalId: order.externalId,
       channel: order.channel,
+      shopName: order.channel === 'ALIEXPRESS' ? order.buyerName : (order.store?.name ?? null),
       buyerName: order.buyerName,
       buyer: {
         name: order.buyerName,

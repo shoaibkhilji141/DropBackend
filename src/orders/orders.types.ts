@@ -27,6 +27,7 @@ export interface OrderView {
   id: string;
   externalId: string | null;
   channel: string;
+  shopName: string | null;
   buyerName: string | null;
   buyer: OrderBuyerView;
   status: OrderStatus;

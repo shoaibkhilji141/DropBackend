@@ -2,6 +2,7 @@ import { createHmac } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AliExpressConfig } from '../../config/configuration';
+import { htmlToPlainText } from '../../common/html';
 import { MarketplaceOrder, OAuthTokenSet } from '../marketplace/marketplace.types';
 import {
   SupplierProduct,
@@ -223,17 +224,17 @@ export class AliExpressApiClient {
     const attempts: Record<string, string | number | boolean | undefined>[] = [
       {
         keyWord: keyword || 'best selling',
-        local: 'en_US',
-        countryCode: 'US',
-        currency: 'USD',
+        local: 'en_GB',
+        countryCode: 'GB',
+        currency: 'GBP',
         pageIndex: 1,
         pageSize: 40,
       },
       {
         keyWord: keyword || 'electronics',
-        local: 'en_US',
-        countryCode: 'US',
-        currency: 'USD',
+        local: 'en_GB',
+        countryCode: 'GB',
+        currency: 'GBP',
         sortBy: this.mapSort(query.sort),
         pageIndex: 1,
         pageSize: 40,
@@ -266,8 +267,8 @@ export class AliExpressApiClient {
   async getProduct(accessToken: string, externalId: string): Promise<SupplierProduct | null> {
     const result = await this.call('aliexpress.ds.product.get', accessToken, {
       product_id: externalId,
-      ship_to_country: 'US',
-      target_currency: 'USD',
+      ship_to_country: 'GB',
+      target_currency: 'GBP',
       target_language: 'EN',
     });
     if (!result.ok) {
@@ -286,13 +287,13 @@ export class AliExpressApiClient {
     const result = await this.call('aliexpress.ds.freight.query', accessToken, {
       queryDeliveryReq: JSON.stringify({
         quantity: 1,
-        shipToCountry: 'US',
+        shipToCountry: 'GB',
         productId,
         provinceCode: '',
         cityCode: '',
-        language: 'en_US',
-        locale: 'en_US',
-        currency: 'USD',
+        language: 'en_GB',
+        locale: 'en_GB',
+        currency: 'GBP',
       }),
     });
     if (!result.ok) return [];
@@ -300,29 +301,61 @@ export class AliExpressApiClient {
   }
 
   async listOrders(accessToken: string): Promise<{ orders: MarketplaceOrder[]; error?: string }> {
-    const start = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const start = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+    const end = new Date();
     const pad = (value: number) => String(value).padStart(2, '0');
-    const stamp = `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}-${pad(start.getUTCDate())} ${pad(start.getUTCHours())}:${pad(start.getUTCMinutes())}:${pad(start.getUTCSeconds())}`;
+    const fmt = (date: Date) =>
+      `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+    const usFmt = (date: Date) =>
+      `${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())}/${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+    const stamp = fmt(start);
+    const query = {
+      current_page: 1,
+      page: 1,
+      page_size: 50,
+      create_date_start: stamp,
+      create_date_end: fmt(end),
+    };
     const attempts = [
       {
-        method: 'aliexpress.trade.buyer.orderlist.get',
+        method: 'aliexpress.ds.commissionorder.listbyIndex',
         body: {
-          param_order_list_request: JSON.stringify({
-            current_page: 1,
+          param1: JSON.stringify({
+            start_time: stamp,
+            end_time: fmt(end),
             page_size: 50,
-            create_date_start: stamp,
+            page_no: 1,
           }),
         },
       },
       {
-        method: 'aliexpress.trade.seller.orderlist.get',
+        method: 'aliexpress.ascp.po.queryPurchasingOrders',
         body: {
-          param_aeop_order_query: JSON.stringify({
-            current_page: 1,
-            page_size: 50,
-            create_date_start: stamp,
-          }),
+          create_time_start: stamp,
+          create_time_end: fmt(end),
+          page_index: 1,
+          page_size: 50,
         },
+      },
+      {
+        method: 'aliexpress.trade.buyer.order.list.get',
+        body: { param_order_list_request: JSON.stringify(query) },
+      },
+      {
+        method: 'aliexpress.trade.buyer.orderlist.get',
+        body: { param_order_list_request: JSON.stringify(query) },
+      },
+      {
+        method: 'aliexpress.trade.buyer.orderlist.get',
+        body: { param_aeop_order_query: JSON.stringify(query) },
+      },
+      {
+        method: 'aliexpress.trade.redefining.findorderlistquery',
+        body: { param1: JSON.stringify({ ...query, create_date_start: usFmt(start), create_date_end: usFmt(end) }) },
+      },
+      {
+        method: 'aliexpress.trade.seller.orderlist.get',
+        body: { param_aeop_order_query: JSON.stringify(query) },
       },
     ];
 
@@ -345,21 +378,27 @@ export class AliExpressApiClient {
     const seen = new Set<string>();
     const orders: MarketplaceOrder[] = [];
     for (const row of this.findOrderRows(result.payload)) {
-      const externalId = String(row.order_id ?? row.orderId ?? '');
+      const externalId = String(
+        row.order_id ?? row.orderId ?? row.order_id_str ?? row.purchase_order_no ?? row.trade_order_id ?? '',
+      );
       if (!externalId || seen.has(externalId)) continue;
       seen.add(externalId);
       const amount = this.money(row.pay_amount ?? row.order_amount ?? row.orderAmount);
       const currency =
         this.currencyOf(row.pay_amount ?? row.order_amount) ||
-        String(row.currency_code ?? 'USD');
-      const created = String(row.gmt_create ?? row.gmtCreate ?? '');
+        String(row.currency_code ?? 'GBP');
+      const created = String(row.gmt_create ?? row.gmtCreate ?? row.gmt_pay_time ?? '');
+      const tracking = this.orderTracking(row);
       orders.push({
         externalId,
-        buyerName: String(row.buyer_signer_fullname ?? row.buyerloginid ?? 'AliExpress buyer'),
+        buyerName: this.orderShopName(row),
+        shopName: this.orderShopName(row),
         status: String(row.order_status ?? row.orderStatus ?? 'PAID'),
         currency,
         totalAmount: amount,
         placedAt: created ? new Date(created.replace(' ', 'T') + 'Z') : new Date(),
+        trackingCode: tracking.code,
+        trackingCarrier: tracking.carrier,
         items: this.orderLineItems(row),
       });
     }
@@ -371,8 +410,8 @@ export class AliExpressApiClient {
       const result = await this.call('aliexpress.ds.recommend.feed.get', accessToken, {
         page_no: 1,
         page_size: 40,
-        country: 'US',
-        target_currency: 'USD',
+        country: 'GB',
+        target_currency: 'GBP',
         target_language: 'EN',
         feed_name: feedName,
       });
@@ -453,7 +492,7 @@ export class AliExpressApiClient {
       description: String(row.title ?? ''),
       images: image ? [image] : [],
       sourceUrl: String(row.productDetailUrl ?? row.product_detail_url ?? `https://www.aliexpress.com/item/${id}.html`),
-      currency: String(row.salePriceCurrency ?? row.target_sale_price_currency ?? 'USD'),
+      currency: String(row.salePriceCurrency ?? row.target_sale_price_currency ?? 'GBP'),
       costPrice: price,
       shippingCost: this.num(row.shipToCost ?? row.freight),
       stock: this.num(row.stock ?? 1) || 1,
@@ -520,11 +559,11 @@ export class AliExpressApiClient {
 
     return {
       externalId: id,
-      title: String(base.subject ?? base.title ?? 'AliExpress product'),
-      description: String(base.detail ?? base.mobile_detail ?? base.subject ?? ''),
+      title: htmlToPlainText(String(base.subject ?? base.title ?? 'AliExpress product')).slice(0, 200),
+      description: htmlToPlainText(String(base.detail ?? base.mobile_detail ?? base.subject ?? '')),
       images: images.length > 0 ? images : firstImage ? [firstImage] : [],
       sourceUrl: String(base.product_detail_url ?? `https://www.aliexpress.com/item/${id}.html`),
-      currency: String(base.currency_code ?? 'USD'),
+      currency: String(base.currency_code ?? 'GBP'),
       costPrice,
       shippingCost: 0,
       stock,
@@ -640,7 +679,18 @@ export class AliExpressApiClient {
         return;
       }
       const record = node as Record<string, unknown>;
-      if (record.order_id != null && (record.order_status != null || record.gmt_create != null || record.product_list != null)) {
+      const id = record.order_id ?? record.orderId ?? record.order_id_str ?? record.purchase_order_no ?? record.trade_order_id;
+      if (
+        id != null &&
+        (record.order_status != null ||
+          record.orderStatus != null ||
+          record.gmt_create != null ||
+          record.gmtCreate != null ||
+          record.product_list != null ||
+          record.product_name != null ||
+          record.productName != null ||
+          record.store_name != null)
+      ) {
         rows.push(record);
       }
       Object.values(record).forEach((child) => visit(child, depth + 1));
@@ -659,7 +709,15 @@ export class AliExpressApiClient {
     for (const list of lists) {
       const items = this.asArray(list)
         .map((item) => ({
-          title: String(item.product_name ?? item.productName ?? item.sku_code ?? 'AliExpress item'),
+          title: String(
+            item.product_name ??
+              item.productName ??
+              item.product_title ??
+              item.sku_code ??
+              row.product_name ??
+              row.product_title ??
+              'AliExpress item',
+          ),
           quantity: this.num(item.product_count ?? item.productCount ?? item.quantity ?? 1) || 1,
           unitPrice: this.money(item.product_price ?? item.productPrice ?? item.init_order_amt),
           imageUrl: this.absoluteImage(String(item.product_img_url ?? item.snapshot_small_photo_path ?? '')) || undefined,
@@ -667,6 +725,49 @@ export class AliExpressApiClient {
         .filter((item) => item.title);
       if (items.length > 0) return items;
     }
-    return [{ title: 'AliExpress order', quantity: 1, unitPrice: this.money(row.pay_amount ?? row.order_amount) }];
+    return [
+      {
+        title: String(row.product_name ?? row.product_title ?? row.productName ?? 'AliExpress order'),
+        quantity: 1,
+        unitPrice: this.money(row.pay_amount ?? row.order_amount),
+      },
+    ];
+  }
+
+  private orderShopName(row: Record<string, unknown>): string {
+    const store =
+      (row.store_info as Record<string, unknown> | undefined) ??
+      (row.storeInfo as Record<string, unknown> | undefined) ??
+      {};
+    const name = String(
+      store.store_name ??
+        store.storeName ??
+        row.store_name ??
+        row.seller_signer_fullname ??
+        row.seller_login_id ??
+        row.sellerloginid ??
+        row.seller_store_name ??
+        row.shop_name ??
+        '',
+    ).trim();
+    return name || 'AliExpress shop';
+  }
+
+  private orderTracking(row: Record<string, unknown>): { code?: string; carrier?: string } {
+    const lists = [
+      this.dig(row, ['logistics_info_list', 'aeop_order_logistics_info']),
+      this.dig(row, ['logistics_info_list']),
+      row.logistics_info,
+    ];
+    for (const list of lists) {
+      const item = this.asArray(list)[0];
+      if (!item) continue;
+      const code = String(item.logistics_no ?? item.tracking_no ?? item.logisticsNo ?? '').trim();
+      const carrier = String(item.logistics_service ?? item.service_name ?? item.logisticsService ?? '').trim();
+      if (code || carrier) return { code: code || undefined, carrier: carrier || undefined };
+    }
+    const code = String(row.logistics_no ?? row.tracking_no ?? '').trim();
+    const carrier = String(row.logistics_service ?? row.logistics_type ?? '').trim();
+    return { code: code || undefined, carrier: carrier || undefined };
   }
 }

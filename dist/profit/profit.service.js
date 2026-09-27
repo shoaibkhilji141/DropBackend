@@ -19,7 +19,7 @@ const FALLBACK_SETTINGS = {
     fixedFee: 0.3,
     additionalCosts: 0,
     defaultMarkupMultiplier: 2.6,
-    currency: 'USD',
+    currency: 'GBP',
 };
 let ProfitService = class ProfitService {
     prisma;
@@ -28,7 +28,12 @@ let ProfitService = class ProfitService {
         this.prisma = prisma;
     }
     async onModuleInit() {
-        this.cachedSettings = await this.readSettings();
+        const current = await this.readSettings();
+        if (current.currency === 'USD') {
+            this.cachedSettings = await this.updateSettings({ currency: 'GBP' });
+            return;
+        }
+        this.cachedSettings = current;
     }
     async getSettings() {
         this.cachedSettings = await this.readSettings();

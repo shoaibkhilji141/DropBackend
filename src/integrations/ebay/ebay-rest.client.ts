@@ -128,16 +128,19 @@ export class EbayRestClient {
   async searchMarketplace(query: string | EbayResearchQuery = {}): Promise<EbayMarketplaceItem[]> {
     const filters: EbayResearchQuery = typeof query === 'string' ? { q: query } : query;
     const limit = Math.min(Math.max(filters.limit ?? 100, 1), 100);
+    let items: EbayMarketplaceItem[] = [];
     try {
-      const items = await this.searchFinding(filters, limit);
-      if (items.length > 0) return this.sortResearchItems(items, filters.sort);
+      items = await this.searchFinding(filters, limit);
     } catch (error) {
       this.logger.warn(
         `Finding search failed, using Browse: ${error instanceof Error ? error.message : error}`,
       );
     }
-    const browse = await this.searchBrowse(filters, Math.min(limit, 50));
-    return this.sortResearchItems(browse, filters.sort);
+    if (items.length === 0) {
+      items = await this.searchBrowse(filters, Math.min(limit, 50));
+    }
+    items = await this.enrichListingSold(items);
+    return this.sortResearchItems(items, filters.sort);
   }
 
   private async searchFinding(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
@@ -350,6 +353,90 @@ export class EbayRestClient {
       listingAgeDays: age,
       endedAt: end,
     };
+  }
+
+  private async enrichListingSold(items: EbayMarketplaceItem[]): Promise<EbayMarketplaceItem[]> {
+    const ids = [...new Set(items.map((item) => this.numericItemId(item.itemId)).filter(Boolean))];
+    if (ids.length === 0) return items;
+    const details = new Map<string, { sold: number; start?: Date }>();
+    for (let offset = 0; offset < ids.length; offset += 20) {
+      const batch = ids.slice(offset, offset + 20);
+      try {
+        for (const row of await this.shoppingSold(batch)) {
+          details.set(row.itemId, row);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Shopping QuantitySold failed: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+    if (details.size === 0) return items;
+
+    return items.map((item) => {
+      const extra = details.get(this.numericItemId(item.itemId));
+      if (!extra) return item;
+      const age = extra.start
+        ? Math.max(0, Math.round((Date.now() - extra.start.getTime()) / 86_400_000))
+        : item.listingAgeDays;
+      return {
+        ...item,
+        soldCount: extra.sold,
+        listingAgeDays: age,
+        soldLast7Days: age != null && age <= 7 ? extra.sold : item.soldLast7Days,
+        soldLast30Days: age != null && age <= 30 ? extra.sold : item.soldLast30Days,
+      };
+    });
+  }
+
+  private async shoppingSold(
+    itemIds: string[],
+  ): Promise<Array<{ itemId: string; sold: number; start?: Date }>> {
+    const params = new URLSearchParams({
+      callname: 'GetMultipleItems',
+      responseencoding: 'JSON',
+      appid: this.config().appId,
+      siteid: this.siteId(),
+      version: '967',
+      IncludeSelector: 'Details',
+      ItemID: itemIds.join(','),
+    });
+    const response = await fetch(`https://open.api.ebay.com/shopping?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const ack = String(payload.Ack ?? payload.ack ?? '');
+    if (!response.ok || /^failure$/i.test(ack)) {
+      const errors = payload.Errors ?? payload.errors;
+      const first = Array.isArray(errors) ? errors[0] : errors;
+      const message =
+        first && typeof first === 'object'
+          ? String((first as { LongMessage?: string; ShortMessage?: string }).LongMessage ??
+              (first as { ShortMessage?: string }).ShortMessage ??
+              'Shopping GetMultipleItems failed')
+          : 'Shopping GetMultipleItems failed';
+      throw new Error(message);
+    }
+    const rows = Array.isArray(payload.Item) ? payload.Item : payload.Item ? [payload.Item] : [];
+    return (rows as Record<string, unknown>[])
+      .map((row): { itemId: string; sold: number; start?: Date } | null => {
+        const itemId = String(row.ItemID ?? row.itemId ?? '');
+        if (!itemId) return null;
+        const listing = (row.ListingDetails ?? row.listingDetails ?? {}) as Record<string, unknown>;
+        const start = this.parseFindingDate(String(listing.StartTime ?? listing.startTime ?? ''));
+        return {
+          itemId,
+          sold: Number(row.QuantitySold ?? row.quantitySold ?? 0) || 0,
+          start,
+        };
+      })
+      .filter((row): row is { itemId: string; sold: number; start?: Date } => row !== null);
+  }
+
+  private numericItemId(itemId: string): string {
+    const browse = itemId.match(/v1\|(\d+)\|/);
+    if (browse) return browse[1];
+    return /^\d{8,}$/.test(itemId) ? itemId : '';
   }
 
   private sortResearchItems(items: EbayMarketplaceItem[], sort?: string): EbayMarketplaceItem[] {

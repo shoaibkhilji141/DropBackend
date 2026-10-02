@@ -55,6 +55,9 @@ exports.RedisModule = RedisModule = __decorate([
                     if (!redis.enabled) {
                         new common_1.Logger('RedisModule').log('Redis is disabled (REDIS_ENABLED=false). Background queues will not start.');
                     }
+                    else {
+                        new common_1.Logger('RedisModule').log(`Redis enabled — queues will use ${redis.host}:${redis.port}.`);
+                    }
                     return {
                         host: redis.host,
                         port: redis.port,

@@ -48,6 +48,10 @@ export class RedisClientHost implements OnModuleDestroy {
           new Logger('RedisModule').log(
             'Redis is disabled (REDIS_ENABLED=false). Background queues will not start.',
           );
+        } else {
+          new Logger('RedisModule').log(
+            `Redis enabled — queues will use ${redis.host}:${redis.port}.`,
+          );
         }
         return {
           host: redis.host,

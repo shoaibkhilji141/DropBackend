@@ -38,10 +38,18 @@ export class GenerateAiContentDto {
   model?: string;
 }
 
+export class AiModelOptionDto {
+  @ApiProperty({ description: 'Value sent back on generate, e.g. groq:llama-3.3-70b-versatile' })
+  id: string;
+  @ApiProperty() label: string;
+  @ApiProperty() provider: string;
+}
+
 export class AiStatusDto {
   @ApiProperty() configured: boolean;
   @ApiProperty() model: string;
   @ApiProperty() provider: string;
+  @ApiProperty({ type: [AiModelOptionDto] }) models: AiModelOptionDto[];
 }
 
 export class AiTextResultDto {
@@ -57,6 +65,12 @@ export class ListingFromUrlDto {
   @IsString()
   @MaxLength(500)
   url: string;
+
+  @ApiPropertyOptional({ description: 'AI model id from GET /ai/status, or auto' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  model?: string;
 }
 
 export class ListingCopySpecDto {

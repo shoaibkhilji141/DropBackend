@@ -56,7 +56,7 @@ const configuration = () => {
         allProviders.push({
             name: 'groq',
             apiKey: groqKey,
-            model: str(process.env.GROQ_MODEL, 'llama-3.3-70b-versatile'),
+            model: str(process.env.GROQ_MODEL, 'openai/gpt-oss-20b'),
             baseUrl: 'https://api.groq.com/openai/v1',
         });
     }
@@ -64,7 +64,7 @@ const configuration = () => {
         allProviders.push({
             name: 'gemini',
             apiKey: geminiKey,
-            model: str(process.env.GEMINI_MODEL, 'gemini-2.5-flash'),
+            model: str(process.env.GEMINI_MODEL, 'gemini-3.8-flash'),
             baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
         });
     }

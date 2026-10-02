@@ -14,8 +14,15 @@ export interface OpenAICompletion {
   tokensUsed: number;
 }
 
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+const GROQ_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+const OPENAI_MODELS = ['gpt-4o-mini', 'gpt-4o'];
+
+export interface AiModelOption {
+  id: string;
+  label: string;
+  provider: string;
+}
 
 /**
  * Tries Groq, then Gemini, then OpenAI. OpenAI is last because the configured
@@ -37,7 +44,7 @@ export class OpenAIService {
   }
 
   defaultModel(): string {
-    return this.config()?.model ?? 'llama-3.3-70b-versatile';
+    return this.config()?.model ?? 'openai/gpt-oss-20b';
   }
 
   provider(): string {
@@ -45,13 +52,32 @@ export class OpenAIService {
     return names.length > 1 ? `auto (${names.join(' → ')})` : (this.config()?.provider ?? 'groq');
   }
 
-  async completeJson(system: string, user: string, _model?: string): Promise<OpenAICompletion> {
+  availableModels(): AiModelOption[] {
+    const models: AiModelOption[] = [{ id: 'auto', label: 'Auto (first available)', provider: 'auto' }];
+    for (const provider of this.config()?.providers ?? []) {
+      for (const model of this.modelsFor(provider.name, provider.model)) {
+        models.push({
+          id: `${provider.name}:${model}`,
+          label: `${this.providerLabel(provider.name)} · ${model}`,
+          provider: provider.name,
+        });
+      }
+    }
+    return models;
+  }
+
+  async completeJson(system: string, user: string, model?: string): Promise<OpenAICompletion> {
     const openai = this.config();
     const providers = openai?.providers ?? [];
     if (!openai?.configured || providers.length === 0) {
       throw new ServiceUnavailableException(
         'No AI key is configured. Add GROQ_API_KEY from https://console.groq.com/keys or GEMINI_API_KEY from https://aistudio.google.com/apikey.',
       );
+    }
+
+    const selected = this.resolveSelection(model, providers);
+    if (selected) {
+      return this.completeWith(selected.provider, system, user, selected.model);
     }
 
     let lastError = '';
@@ -65,6 +91,45 @@ export class OpenAIService {
     }
 
     throw new BadGatewayException(lastError || 'All configured AI providers failed.');
+  }
+
+  private resolveSelection(
+    model: string | undefined,
+    providers: AiProviderConfig[],
+  ): { provider: AiProviderConfig; model: string } | null {
+    const raw = model?.trim();
+    if (!raw || raw === 'auto') return null;
+
+    const colon = raw.indexOf(':');
+    const providerName = (colon >= 0 ? raw.slice(0, colon) : '').toLowerCase();
+    const modelName = (colon >= 0 ? raw.slice(colon + 1) : raw).trim();
+
+    const provider =
+      providers.find((item) => item.name === providerName) ??
+      providers.find((item) => this.modelsFor(item.name, item.model).includes(modelName)) ??
+      providers.find((item) => item.model === modelName);
+
+    if (!provider || !modelName) {
+      throw new ServiceUnavailableException(
+        `Unknown AI model "${raw}". Choose one of: ${this.availableModels()
+          .map((item) => item.id)
+          .join(', ')}`,
+      );
+    }
+
+    return { provider, model: modelName };
+  }
+
+  private modelsFor(provider: AiProviderConfig['name'], configured?: string): string[] {
+    const extras =
+      provider === 'groq' ? GROQ_MODELS : provider === 'gemini' ? GEMINI_MODELS : OPENAI_MODELS;
+    return Array.from(new Set([configured, ...extras].filter((item): item is string => Boolean(item))));
+  }
+
+  private providerLabel(provider: AiProviderConfig['name']): string {
+    if (provider === 'groq') return 'Groq';
+    if (provider === 'gemini') return 'Gemini';
+    return 'OpenAI';
   }
 
   parseJsonObject(text: string): Record<string, unknown> {
@@ -114,13 +179,15 @@ export class OpenAIService {
     provider: AiProviderConfig,
     system: string,
     user: string,
+    modelOverride?: string,
   ): Promise<OpenAICompletion> {
     if (provider.name === 'gemini') {
-      return this.completeGemini(provider, system, user);
+      return this.completeGemini(provider, system, user, modelOverride);
     }
 
-    const models =
-      provider.name === 'groq'
+    const models = modelOverride
+      ? [modelOverride]
+      : provider.name === 'groq'
         ? Array.from(new Set([provider.model, ...GROQ_MODELS]))
         : [provider.model];
 
@@ -173,8 +240,11 @@ export class OpenAIService {
     provider: AiProviderConfig,
     system: string,
     user: string,
+    modelOverride?: string,
   ): Promise<OpenAICompletion> {
-    const models = Array.from(new Set([provider.model, ...GEMINI_MODELS]));
+    const models = modelOverride
+      ? [modelOverride]
+      : Array.from(new Set([provider.model, ...GEMINI_MODELS]));
     let lastError: unknown;
     for (const model of models) {
       try {

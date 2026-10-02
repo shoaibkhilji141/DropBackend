@@ -222,7 +222,7 @@ export class EbayRestClient {
     const filters: EbayResearchQuery = typeof query === 'string' ? { q: query } : query;
     const limit = Math.min(Math.max(filters.limit ?? 24, 1), 80);
     const items = await this.searchBrowse(filters, Math.min(limit, 50));
-    return this.sortResearchItems(await this.enrichListingSold(items), filters.sort);
+    return this.sortResearchItems(await this.enrichListingSold(items, filters), filters.sort);
   }
 
   private async searchFinding(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
@@ -286,6 +286,7 @@ export class EbayRestClient {
         categories?: { categoryName?: string }[];
         itemCreationDate?: string;
         itemOriginDate?: string;
+        estimatedAvailabilities?: { estimatedSoldQuantity?: number }[];
       }>;
     }>('GET', `${this.hosts().api}/buy/browse/v1/item_summary/search?${params.toString()}`, token);
 
@@ -295,6 +296,10 @@ export class EbayRestClient {
         if (!itemId) return null;
         const start = this.parseFindingDate(item.itemCreationDate ?? item.itemOriginDate);
         const age = start ? Math.max(0, Math.round((Date.now() - start.getTime()) / 86_400_000)) : null;
+        const sold = Math.max(
+          0,
+          ...(item.estimatedAvailabilities ?? []).map((row) => Number(row.estimatedSoldQuantity ?? 0) || 0),
+        );
         return {
           itemId,
           title: String(item.title ?? 'eBay item'),
@@ -307,9 +312,9 @@ export class EbayRestClient {
           categories: (item.categories ?? [])
             .map((category) => category.categoryName)
             .filter((name): name is string => Boolean(name)),
-          soldCount: 0,
-          soldLast7Days: this.windowSold(0, age, 7),
-          soldLast30Days: this.windowSold(0, age, 30),
+          soldCount: sold,
+          soldLast7Days: this.windowSold(sold, age, 7),
+          soldLast30Days: this.windowSold(sold, age, 30),
           listingAgeDays: age,
           purchaseHistoryUrl: this.purchaseHistoryUrl(itemId),
         };
@@ -444,50 +449,70 @@ export class EbayRestClient {
   }
 
   /**
-   * Fills in sold quantity and listing age using Browse's bulk item endpoint.
-   * One request covers 20 items, so a full page of results costs ~3 calls
-   * instead of one call per listing.
+   * Fills sold quantity from Browse get-item. Bulk `item/?item_ids=` is
+   * rejected for this app key; single-item GET still returns
+   * estimatedSoldQuantity. Requests run in small parallel batches.
    */
-  private async enrichListingSold(items: EbayMarketplaceItem[]): Promise<EbayMarketplaceItem[]> {
+  private async enrichListingSold(
+    items: EbayMarketplaceItem[],
+    _filters: EbayResearchQuery,
+  ): Promise<EbayMarketplaceItem[]> {
     const details = new Map<string, { sold: number; start?: Date }>();
-    const ids = items.map((item) => item.itemId).filter((id) => id.startsWith('v1|'));
-    const chunks: string[][] = [];
-    for (let offset = 0; offset < ids.length; offset += BULK_ITEM_LIMIT) {
-      chunks.push(ids.slice(offset, offset + BULK_ITEM_LIMIT));
+    const ids = items.map((item) => item.itemId).filter(Boolean);
+    const batchSize = 8;
+
+    for (let offset = 0; offset < ids.length; offset += batchSize) {
+      const chunk = ids.slice(offset, offset + batchSize);
+      const rows = await Promise.all(
+        chunk.map((itemId) =>
+          this.browseGetOneSold(itemId).catch((error: unknown) => {
+            this.logger.warn(
+              `Browse get item sold failed for ${itemId}: ${
+                error instanceof Error ? error.message : error
+              }`,
+            );
+            return null;
+          }),
+        ),
+      );
+      for (const row of rows) {
+        if (!row) continue;
+        details.set(row.itemId, row);
+        if (row.legacyId) details.set(row.legacyId, row);
+      }
     }
 
-    const batches = await Promise.all(
-      chunks.map((chunk) =>
-        this.browseGetItems(chunk).catch((error: unknown) => {
-          this.logger.warn(
-            `Browse bulk getItems failed: ${error instanceof Error ? error.message : error}`,
-          );
-          return [];
-        }),
-      ),
-    );
-
-    for (const row of batches.flat()) {
-      details.set(row.itemId, row);
-      if (row.legacyId) details.set(row.legacyId, row);
-    }
     if (details.size === 0) return items;
 
     return items.map((item) => {
       const extra = details.get(item.itemId) ?? details.get(this.numericItemId(item.itemId));
       if (!extra) return item;
+      const sold = Math.max(item.soldCount, extra.sold);
       const age = extra.start
         ? Math.max(0, Math.round((Date.now() - extra.start.getTime()) / 86_400_000))
         : item.listingAgeDays;
       return {
         ...item,
-        soldCount: extra.sold,
+        soldCount: sold,
         listingAgeDays: age,
-        soldLast7Days: this.windowSold(extra.sold, age, 7),
-        soldLast30Days: this.windowSold(extra.sold, age, 30),
+        soldLast7Days: this.windowSold(sold, age, 7),
+        soldLast30Days: this.windowSold(sold, age, 30),
         purchaseHistoryUrl: this.purchaseHistoryUrl(item.itemId),
       };
     });
+  }
+
+  private async browseGetOneSold(
+    itemId: string,
+  ): Promise<{ itemId: string; legacyId?: string; sold: number; start?: Date } | null> {
+    const token = await this.applicationToken();
+    const url = itemId.startsWith('v1|')
+      ? `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`
+      : `${this.hosts().api}/buy/browse/v1/item/get_item_by_legacy_id?${new URLSearchParams({
+          legacy_item_id: this.numericItemId(itemId) || itemId,
+        }).toString()}`;
+    const payload = await this.request<BrowseItemDetailPayload>('GET', url, token);
+    return this.mapBrowseSold(payload);
   }
 
   /**

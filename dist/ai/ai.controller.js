@@ -30,7 +30,7 @@ let AiController = class AiController {
         return this.aiService.history();
     }
     fromUrl(dto) {
-        return this.aiService.generateFromUrl(dto.url);
+        return this.aiService.generateFromUrl(dto.url, dto.model);
     }
     generateTitle(dto) {
         return this.aiService.generateTitle(dto);

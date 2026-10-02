@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AiListResultDto = exports.ListingSeoResultDto = exports.ListingSeoAspectDto = exports.ListingCopyResultDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.GenerateAiContentDto = void 0;
+exports.AiListResultDto = exports.ListingSeoResultDto = exports.ListingSeoAspectDto = exports.ListingCopyResultDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.AiModelOptionDto = exports.GenerateAiContentDto = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
@@ -66,12 +66,34 @@ __decorate([
     (0, class_validator_1.MaxLength)(80),
     __metadata("design:type", String)
 ], GenerateAiContentDto.prototype, "model", void 0);
+class AiModelOptionDto {
+    id;
+    label;
+    provider;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { id: { required: true, type: () => String }, label: { required: true, type: () => String }, provider: { required: true, type: () => String } };
+    }
+}
+exports.AiModelOptionDto = AiModelOptionDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Value sent back on generate, e.g. groq:llama-3.3-70b-versatile' }),
+    __metadata("design:type", String)
+], AiModelOptionDto.prototype, "id", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], AiModelOptionDto.prototype, "label", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], AiModelOptionDto.prototype, "provider", void 0);
 class AiStatusDto {
     configured;
     model;
     provider;
+    models;
     static _OPENAPI_METADATA_FACTORY() {
-        return { configured: { required: true, type: () => Boolean }, model: { required: true, type: () => String }, provider: { required: true, type: () => String } };
+        return { configured: { required: true, type: () => Boolean }, model: { required: true, type: () => String }, provider: { required: true, type: () => String }, models: { required: true, type: () => [require("./ai.dto").AiModelOptionDto] } };
     }
 }
 exports.AiStatusDto = AiStatusDto;
@@ -87,6 +109,10 @@ __decorate([
     (0, swagger_1.ApiProperty)(),
     __metadata("design:type", String)
 ], AiStatusDto.prototype, "provider", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [AiModelOptionDto] }),
+    __metadata("design:type", Array)
+], AiStatusDto.prototype, "models", void 0);
 class AiTextResultDto {
     requestId;
     type;
@@ -120,8 +146,9 @@ __decorate([
 ], AiTextResultDto.prototype, "tokensUsed", void 0);
 class ListingFromUrlDto {
     url;
+    model;
     static _OPENAPI_METADATA_FACTORY() {
-        return { url: { required: true, type: () => String, maxLength: 500 } };
+        return { url: { required: true, type: () => String, maxLength: 500 }, model: { required: false, type: () => String, maxLength: 80 } };
     }
 }
 exports.ListingFromUrlDto = ListingFromUrlDto;
@@ -131,6 +158,13 @@ __decorate([
     (0, class_validator_1.MaxLength)(500),
     __metadata("design:type", String)
 ], ListingFromUrlDto.prototype, "url", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'AI model id from GET /ai/status, or auto' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(80),
+    __metadata("design:type", String)
+], ListingFromUrlDto.prototype, "model", void 0);
 class ListingCopySpecDto {
     name;
     value;

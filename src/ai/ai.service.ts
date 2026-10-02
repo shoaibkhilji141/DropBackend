@@ -33,6 +33,7 @@ export class AiService {
       configured: this.openai.isConfigured(),
       model: this.openai.defaultModel(),
       provider: this.openai.provider(),
+      models: this.openai.availableModels(),
     };
   }
 
@@ -75,7 +76,7 @@ export class AiService {
     });
   }
 
-  async generateFromUrl(url: string): Promise<ListingCopyResultDto> {
+  async generateFromUrl(url: string, model?: string): Promise<ListingCopyResultDto> {
     const externalId = this.productIdFromUrl(url);
     if (!externalId) {
       throw new BadRequestException(
@@ -100,6 +101,7 @@ export class AiService {
       category: product.category,
       keywords: specs.slice(0, 8),
       tone: 'Sales',
+      model,
     };
 
     const result = await this.runText(AIRequestType.TITLE, dto, {
@@ -332,13 +334,13 @@ Never invent brands, certifications, warranties or measurements that are absent 
         userId: account.id,
         type,
         prompt: user,
-        model: this.openai.defaultModel(),
+        model: dto.model?.trim() || this.openai.defaultModel(),
         status: AIStatus.PENDING,
       },
     });
 
     try {
-      const completion = await this.openai.completeJson(system, user);
+      const completion = await this.openai.completeJson(system, user, dto.model);
       const payload = this.openai.parseJsonObject(completion.text);
       return { request, completion, payload };
     } catch (error) {

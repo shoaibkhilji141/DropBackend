@@ -28,7 +28,7 @@ export class AiController {
 
   @Post('from-url')
   fromUrl(@Body() dto: ListingFromUrlDto): Promise<ListingCopyResultDto> {
-    return this.aiService.generateFromUrl(dto.url);
+    return this.aiService.generateFromUrl(dto.url, dto.model);
   }
 
   @Post('title')

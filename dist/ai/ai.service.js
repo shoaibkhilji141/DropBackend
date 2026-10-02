@@ -36,6 +36,7 @@ let AiService = class AiService {
             configured: this.openai.isConfigured(),
             model: this.openai.defaultModel(),
             provider: this.openai.provider(),
+            models: this.openai.availableModels(),
         };
     }
     history() {
@@ -72,7 +73,7 @@ let AiService = class AiService {
             extract: (payload) => this.openai.requireStringArray(payload, 'keywords').slice(0, 16),
         });
     }
-    async generateFromUrl(url) {
+    async generateFromUrl(url, model) {
         const externalId = this.productIdFromUrl(url);
         if (!externalId) {
             throw new common_1.BadRequestException('Paste a full AliExpress product link, for example https://www.aliexpress.com/item/1005001234567890.html');
@@ -93,6 +94,7 @@ let AiService = class AiService {
             category: product.category,
             keywords: specs.slice(0, 8),
             tone: 'Sales',
+            model,
         };
         const result = await this.runText(client_1.AIRequestType.TITLE, dto, {
             system: `${SELLER_VOICE} Return JSON {"title":"...","description":"...","specs":["Name: value"],"keywords":["..."],"highlights":["..."]}. title is a ready-to-paste eBay title of at most 80 characters that leads with what the buyer is searching for, then the main benefit or spec. It should be specific enough to win the click and the sale. No ALL CAPS, no keyword stuffing, no quotes. description is plain text: a short opening that sells the outcome, then a feature bullet list, then a short shipping note that does not invent delivery times. specs are factual Name: value lines taken only from the source. keywords are 8 to 12 search phrases. highlights are 4 to 6 lines under 90 characters.`,
@@ -280,12 +282,12 @@ Never invent brands, certifications, warranties or measurements that are absent 
                 userId: account.id,
                 type,
                 prompt: user,
-                model: this.openai.defaultModel(),
+                model: dto.model?.trim() || this.openai.defaultModel(),
                 status: client_1.AIStatus.PENDING,
             },
         });
         try {
-            const completion = await this.openai.completeJson(system, user);
+            const completion = await this.openai.completeJson(system, user, dto.model);
             const payload = this.openai.parseJsonObject(completion.text);
             return { request, completion, payload };
         }

@@ -100,9 +100,14 @@ export class ResearchInsightsService {
   }) {
     const limit = Math.min(Math.max(query.limit ?? 24, 1), 80);
     const key = this.cache.key('ebay:search', { ...query, limit });
-    return this.cache.wrap(key, SEARCH_TTL_MS, () =>
+    const result = await this.cache.wrap(key, SEARCH_TTL_MS, () =>
       this.ebay.searchMarketplace({ ...query, limit }),
     );
+    // Do not keep a page of 0-sold cards if enrichment failed this turn.
+    if (result.items.length > 0 && result.items.every((item) => !item.soldCount)) {
+      this.cache.invalidate(key);
+    }
+    return result;
   }
 
   async getInsight(itemId: string): Promise<EbayItemInsightView> {

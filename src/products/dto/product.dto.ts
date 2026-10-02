@@ -110,7 +110,7 @@ export class SearchSupplierProductsDto {
 
   @ApiPropertyOptional({
     enum: [...SUPPLIER_SORTS, ...DERIVED_SORTS],
-    default: 'relevance',
+    default: 'ordersDesc',
   })
   @IsOptional()
   @IsIn([...SUPPLIER_SORTS, ...DERIVED_SORTS])
@@ -332,4 +332,12 @@ export class SearchEbayResearchDto {
   @Min(1)
   @Max(100)
   limit?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  page?: number;
 }

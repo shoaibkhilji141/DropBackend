@@ -14,6 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProductsService = void 0;
 const common_1 = require("@nestjs/common");
+const cache_service_1 = require("../common/cache/cache.service");
 const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../common/prisma/prisma.service");
 const demo_data_1 = require("../common/demo-data");
@@ -48,16 +49,22 @@ let ProductsService = class ProductsService {
     profit;
     accounts;
     supplier;
-    constructor(prisma, users, profit, accounts, supplier) {
+    cache;
+    constructor(prisma, users, profit, accounts, supplier, cache) {
         this.prisma = prisma;
         this.users = users;
         this.profit = profit;
         this.accounts = accounts;
         this.supplier = supplier;
+        this.cache = cache;
     }
     async searchSupplier(query) {
-        const supplierSort = this.supplierSort(query.sort);
-        const result = await this.supplier.search({
+        const requestedSort = query.sort ?? 'ordersDesc';
+        const supplierSort = this.supplierSort(requestedSort) ?? 'ordersDesc';
+        const page = Math.max(query.page ?? 1, 1);
+        const pageSize = Math.min(Math.max(query.pageSize ?? 24, 1), 60);
+        const cacheKey = this.cache.key('ali:search:sold', { ...query, sort: supplierSort, page, pageSize });
+        const result = await this.cache.wrap(cacheKey, 90_000, () => this.supplier.search({
             search: query.search,
             category: query.category,
             supplier: query.supplier,
@@ -67,7 +74,9 @@ let ProductsService = class ProductsService {
             minOrders: query.minOrders,
             inStockOnly: query.inStockOnly,
             sort: supplierSort,
-        });
+            page,
+            pageSize,
+        }));
         const savedByExternalId = await this.savedLookup(result.items.map((product) => product.externalId));
         let items = result.items.map((product) => {
             const estimate = this.profit.estimate(product.costPrice, product.shippingCost);
@@ -86,16 +95,14 @@ let ProductsService = class ProductsService {
                 return false;
             return true;
         });
-        items = this.applyDerivedSort(items, query.sort);
-        const page = query.page ?? 1;
-        const pageSize = query.pageSize ?? 12;
-        const start = (page - 1) * pageSize;
+        items = this.applyDerivedSort(items, requestedSort);
+        const total = Math.max(result.total ?? items.length, (page - 1) * pageSize + items.length);
         return {
-            items: items.slice(start, start + pageSize),
-            total: items.length,
+            items,
+            total,
             page,
             pageSize,
-            pageCount: Math.max(1, Math.ceil(items.length / pageSize)),
+            pageCount: Math.max(1, Math.ceil(total / pageSize)),
             facets: result.facets,
         };
     }
@@ -321,6 +328,6 @@ exports.ProductsService = ProductsService = __decorate([
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         users_service_1.UsersService,
         profit_service_1.ProfitService,
-        integration_accounts_service_1.IntegrationAccountsService, Object])
+        integration_accounts_service_1.IntegrationAccountsService, Object, cache_service_1.CacheService])
 ], ProductsService);
 //# sourceMappingURL=products.service.js.map

@@ -31,6 +31,7 @@ export class ResearchController {
       condition: query.condition,
       sort: query.sort,
       limit: query.limit,
+      page: query.page,
     });
   }
 
@@ -38,6 +39,14 @@ export class ResearchController {
   @ApiOperation({ summary: 'Sales, keywords and SEO insight for one eBay UK listing' })
   getEbayInsight(@Query('itemId') itemId: string) {
     return this.insights.getInsight(itemId);
+  }
+
+  @Get('aliexpress/insight')
+  @ApiOperation({
+    summary: 'Keywords, similar products, eBay UK matches and policy for one AliExpress product',
+  })
+  getAliExpressInsight(@Query('externalId') externalId: string) {
+    return this.insights.getAliExpressInsight(externalId);
   }
 
   @Get('aliexpress/match')

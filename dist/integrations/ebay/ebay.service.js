@@ -138,10 +138,16 @@ let EbayService = EbayService_1 = class EbayService {
         return account.accessToken;
     }
     async searchMarketplace(query) {
-        const items = await this.client.searchMarketplace(query ?? {});
+        const result = await this.client.searchMarketplace(query ?? {});
+        const pageSize = result.limit;
+        const page = Math.floor(result.offset / pageSize) + 1;
         return {
-            items,
+            items: result.items,
             marketplace: this.configService.get('ebay')?.marketplaceId ?? 'EBAY_GB',
+            page,
+            pageSize,
+            total: result.total,
+            pageCount: Math.max(1, Math.ceil(result.total / pageSize)),
         };
     }
     async publishListing(userId, listingId, extras) {

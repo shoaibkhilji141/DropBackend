@@ -1,4 +1,6 @@
-import { EbayItemDetail } from '../integrations/ebay/ebay-rest.client';
+import { ListingPolicyCheck } from '../ai/ebay-listing-policy';
+import { EbayItemDetail, EbayMarketplaceItem } from '../integrations/ebay/ebay-rest.client';
+import { ResearchProductView } from './products.types';
 
 export type SalesDataSource = 'observed' | 'listing-average';
 
@@ -99,4 +101,13 @@ export interface EbayItemInsightView {
   sales: SalesHistoryView;
   keywords: KeywordInsightsView;
   seo: SeoRecommendationView;
+}
+
+export interface AliExpressInsightView {
+  product: ResearchProductView;
+  ebayQuery: string;
+  similar: ResearchProductView[];
+  ebayMatches: EbayMarketplaceItem[];
+  keywords: KeywordInsightsView;
+  policy: ListingPolicyCheck;
 }

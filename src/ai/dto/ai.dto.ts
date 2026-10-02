@@ -63,7 +63,7 @@ export class AiTextResultDto {
 export class ListingFromUrlDto {
   @ApiProperty({ description: 'AliExpress product page URL or numeric product id' })
   @IsString()
-  @MaxLength(500)
+  @MaxLength(4000)
   url: string;
 
   @ApiPropertyOptional({ description: 'AI model id from GET /ai/status, or auto' })
@@ -90,6 +90,30 @@ export class ListingCopyProductDto {
   @ApiProperty({ type: [ListingCopySpecDto] }) specs: ListingCopySpecDto[];
 }
 
+export class ListingPolicyViolationDto {
+  @ApiProperty() policy: string;
+  @ApiProperty({ enum: ['prohibited', 'restricted', 'risk'] }) severity: string;
+  @ApiProperty() reason: string;
+  @ApiPropertyOptional() evidence?: string;
+}
+
+export class ListingPolicyAreaDto {
+  @ApiProperty() area: string;
+  @ApiProperty({ enum: ['pass', 'flag', 'fail'] }) status: string;
+  @ApiProperty() note: string;
+}
+
+export class ListingPolicyCheckDto {
+  @ApiProperty({ enum: ['list', 'review', 'do_not_list'] }) verdict: string;
+  @ApiProperty() shouldList: boolean;
+  @ApiProperty() summary: string;
+  @ApiProperty() score: number;
+  @ApiProperty() confidence: number;
+  @ApiProperty({ type: [ListingPolicyViolationDto] }) violations: ListingPolicyViolationDto[];
+  @ApiProperty({ type: [String] }) requirements: string[];
+  @ApiProperty({ type: [ListingPolicyAreaDto] }) checks: ListingPolicyAreaDto[];
+}
+
 export class ListingCopyResultDto {
   @ApiProperty() requestId: string;
   @ApiProperty() model: string;
@@ -100,6 +124,7 @@ export class ListingCopyResultDto {
   @ApiProperty({ type: [String] }) keywords: string[];
   @ApiProperty({ type: [String] }) highlights: string[];
   @ApiProperty({ type: ListingCopyProductDto }) product: ListingCopyProductDto;
+  @ApiProperty({ type: ListingPolicyCheckDto }) policy: ListingPolicyCheckDto;
 }
 
 export class ListingSeoAspectDto {

@@ -40,6 +40,14 @@ export interface EbayResearchQuery {
   condition?: string;
   sort?: string;
   limit?: number;
+  offset?: number;
+}
+
+export interface EbayMarketplaceSearchResult {
+  items: EbayMarketplaceItem[];
+  total: number;
+  offset: number;
+  limit: number;
 }
 
 export interface EbayMarketplaceItem {
@@ -218,11 +226,19 @@ export class EbayRestClient {
     return tokens.accessToken;
   }
 
-  async searchMarketplace(query: string | EbayResearchQuery = {}): Promise<EbayMarketplaceItem[]> {
+  async searchMarketplace(
+    query: string | EbayResearchQuery = {},
+  ): Promise<EbayMarketplaceSearchResult> {
     const filters: EbayResearchQuery = typeof query === 'string' ? { q: query } : query;
-    const limit = Math.min(Math.max(filters.limit ?? 24, 1), 80);
-    const items = await this.searchBrowse(filters, Math.min(limit, 50));
-    return this.sortResearchItems(await this.enrichListingSold(items, filters), filters.sort);
+    const limit = Math.min(Math.max(filters.limit ?? 24, 1), 50);
+    const offset = Math.min(Math.max(filters.offset ?? 0, 0), 10_000 - limit);
+    const { items, total } = await this.searchBrowse(filters, limit, offset);
+    return {
+      items: this.sortResearchItems(await this.enrichListingSold(items, filters), filters.sort),
+      total,
+      offset,
+      limit,
+    };
   }
 
   private async searchFinding(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
@@ -254,10 +270,15 @@ export class EbayRestClient {
     });
   }
 
-  private async searchBrowse(filters: EbayResearchQuery, limit: number): Promise<EbayMarketplaceItem[]> {
+  private async searchBrowse(
+    filters: EbayResearchQuery,
+    limit: number,
+    offset = 0,
+  ): Promise<{ items: EbayMarketplaceItem[]; total: number }> {
     const token = await this.applicationToken();
     const params = new URLSearchParams({
       limit: String(limit),
+      offset: String(offset),
       fieldgroups: 'EXTENDED',
     });
     const trimmed = filters.q?.trim();
@@ -273,7 +294,11 @@ export class EbayRestClient {
     if (filters.condition === 'NEW') filterParts.push('conditions:{NEW}');
     if (filters.condition === 'USED') filterParts.push('conditions:{USED}');
     params.set('filter', filterParts.join(','));
+    if (filters.sort === 'priceAsc') params.set('sort', 'price');
+    if (filters.sort === 'priceDesc') params.set('sort', '-price');
+    if (filters.sort === 'newest') params.set('sort', 'newlyListed');
     const payload = await this.request<{
+      total?: number;
       itemSummaries?: Array<{
         itemId?: string;
         title?: string;
@@ -290,7 +315,7 @@ export class EbayRestClient {
       }>;
     }>('GET', `${this.hosts().api}/buy/browse/v1/item_summary/search?${params.toString()}`, token);
 
-    return (payload.itemSummaries ?? [])
+    const items = (payload.itemSummaries ?? [])
       .map((item): EbayMarketplaceItem | null => {
         const itemId = String(item.itemId ?? '');
         if (!itemId) return null;
@@ -320,6 +345,12 @@ export class EbayRestClient {
         };
       })
       .filter((item): item is EbayMarketplaceItem => item !== null);
+    const reported = Number(payload.total);
+    const total =
+      Number.isFinite(reported) && reported > 0
+        ? reported
+        : offset + items.length + (items.length >= limit ? limit : 0);
+    return { items, total };
   }
 
   private async finding(

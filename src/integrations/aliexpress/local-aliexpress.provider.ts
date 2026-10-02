@@ -43,8 +43,15 @@ export class LocalAliExpressProvider implements SupplierProductProvider {
       return true;
     });
 
+    const sorted = this.sort(matches, query.sort);
+    const page = Math.max(query.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(query.pageSize ?? 24, 1), 60);
+    const start = (page - 1) * pageSize;
     return {
-      items: this.sort(matches, query.sort),
+      items: sorted.slice(start, start + pageSize),
+      total: sorted.length,
+      page,
+      pageSize,
       facets: {
         categories: this.facet(matches, (product) => product.category),
         suppliers: this.facet(matches, (product) => product.supplier.name),

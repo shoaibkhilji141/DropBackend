@@ -154,11 +154,24 @@ export class EbayService {
 
   async searchMarketplace(
     query?: string | EbayResearchQuery,
-  ): Promise<{ items: EbayMarketplaceItem[]; marketplace: string }> {
-    const items = await this.client.searchMarketplace(query ?? {});
+  ): Promise<{
+    items: EbayMarketplaceItem[];
+    marketplace: string;
+    page: number;
+    pageSize: number;
+    pageCount: number;
+    total: number;
+  }> {
+    const result = await this.client.searchMarketplace(query ?? {});
+    const pageSize = result.limit;
+    const page = Math.floor(result.offset / pageSize) + 1;
     return {
-      items,
+      items: result.items,
       marketplace: this.configService.get<EbayConfig>('ebay')?.marketplaceId ?? 'EBAY_GB',
+      page,
+      pageSize,
+      total: result.total,
+      pageCount: Math.max(1, Math.ceil(result.total / pageSize)),
     };
   }
 

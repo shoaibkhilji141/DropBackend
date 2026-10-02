@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AiListResultDto = exports.ListingSeoResultDto = exports.ListingSeoAspectDto = exports.ListingCopyResultDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.AiModelOptionDto = exports.GenerateAiContentDto = void 0;
+exports.AiListResultDto = exports.ListingSeoResultDto = exports.ListingSeoAspectDto = exports.ListingCopyResultDto = exports.ListingPolicyCheckDto = exports.ListingPolicyAreaDto = exports.ListingPolicyViolationDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.AiModelOptionDto = exports.GenerateAiContentDto = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
@@ -148,14 +148,14 @@ class ListingFromUrlDto {
     url;
     model;
     static _OPENAPI_METADATA_FACTORY() {
-        return { url: { required: true, type: () => String, maxLength: 500 }, model: { required: false, type: () => String, maxLength: 80 } };
+        return { url: { required: true, type: () => String, maxLength: 4000 }, model: { required: false, type: () => String, maxLength: 80 } };
     }
 }
 exports.ListingFromUrlDto = ListingFromUrlDto;
 __decorate([
     (0, swagger_1.ApiProperty)({ description: 'AliExpress product page URL or numeric product id' }),
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.MaxLength)(500),
+    (0, class_validator_1.MaxLength)(4000),
     __metadata("design:type", String)
 ], ListingFromUrlDto.prototype, "url", void 0);
 __decorate([
@@ -232,6 +232,99 @@ __decorate([
     (0, swagger_1.ApiProperty)({ type: [ListingCopySpecDto] }),
     __metadata("design:type", Array)
 ], ListingCopyProductDto.prototype, "specs", void 0);
+class ListingPolicyViolationDto {
+    policy;
+    severity;
+    reason;
+    evidence;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { policy: { required: true, type: () => String }, severity: { required: true, type: () => String }, reason: { required: true, type: () => String }, evidence: { required: false, type: () => String } };
+    }
+}
+exports.ListingPolicyViolationDto = ListingPolicyViolationDto;
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingPolicyViolationDto.prototype, "policy", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ enum: ['prohibited', 'restricted', 'risk'] }),
+    __metadata("design:type", String)
+], ListingPolicyViolationDto.prototype, "severity", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingPolicyViolationDto.prototype, "reason", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    __metadata("design:type", String)
+], ListingPolicyViolationDto.prototype, "evidence", void 0);
+class ListingPolicyAreaDto {
+    area;
+    status;
+    note;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { area: { required: true, type: () => String }, status: { required: true, type: () => String }, note: { required: true, type: () => String } };
+    }
+}
+exports.ListingPolicyAreaDto = ListingPolicyAreaDto;
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingPolicyAreaDto.prototype, "area", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ enum: ['pass', 'flag', 'fail'] }),
+    __metadata("design:type", String)
+], ListingPolicyAreaDto.prototype, "status", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingPolicyAreaDto.prototype, "note", void 0);
+class ListingPolicyCheckDto {
+    verdict;
+    shouldList;
+    summary;
+    score;
+    confidence;
+    violations;
+    requirements;
+    checks;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { verdict: { required: true, type: () => String }, shouldList: { required: true, type: () => Boolean }, summary: { required: true, type: () => String }, score: { required: true, type: () => Number }, confidence: { required: true, type: () => Number }, violations: { required: true, type: () => [require("./ai.dto").ListingPolicyViolationDto] }, requirements: { required: true, type: () => [String] }, checks: { required: true, type: () => [require("./ai.dto").ListingPolicyAreaDto] } };
+    }
+}
+exports.ListingPolicyCheckDto = ListingPolicyCheckDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ enum: ['list', 'review', 'do_not_list'] }),
+    __metadata("design:type", String)
+], ListingPolicyCheckDto.prototype, "verdict", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Boolean)
+], ListingPolicyCheckDto.prototype, "shouldList", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingPolicyCheckDto.prototype, "summary", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Number)
+], ListingPolicyCheckDto.prototype, "score", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Number)
+], ListingPolicyCheckDto.prototype, "confidence", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [ListingPolicyViolationDto] }),
+    __metadata("design:type", Array)
+], ListingPolicyCheckDto.prototype, "violations", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingPolicyCheckDto.prototype, "requirements", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [ListingPolicyAreaDto] }),
+    __metadata("design:type", Array)
+], ListingPolicyCheckDto.prototype, "checks", void 0);
 class ListingCopyResultDto {
     requestId;
     model;
@@ -242,8 +335,9 @@ class ListingCopyResultDto {
     keywords;
     highlights;
     product;
+    policy;
     static _OPENAPI_METADATA_FACTORY() {
-        return { requestId: { required: true, type: () => String }, model: { required: true, type: () => String }, tokensUsed: { required: true, type: () => Number }, title: { required: true, type: () => String }, description: { required: true, type: () => String }, specs: { required: true, type: () => [String] }, keywords: { required: true, type: () => [String] }, highlights: { required: true, type: () => [String] }, product: { required: true, type: () => require("./ai.dto").ListingCopyProductDto } };
+        return { requestId: { required: true, type: () => String }, model: { required: true, type: () => String }, tokensUsed: { required: true, type: () => Number }, title: { required: true, type: () => String }, description: { required: true, type: () => String }, specs: { required: true, type: () => [String] }, keywords: { required: true, type: () => [String] }, highlights: { required: true, type: () => [String] }, product: { required: true, type: () => require("./ai.dto").ListingCopyProductDto }, policy: { required: true, type: () => require("./ai.dto").ListingPolicyCheckDto } };
     }
 }
 exports.ListingCopyResultDto = ListingCopyResultDto;
@@ -283,6 +377,10 @@ __decorate([
     (0, swagger_1.ApiProperty)({ type: ListingCopyProductDto }),
     __metadata("design:type", ListingCopyProductDto)
 ], ListingCopyResultDto.prototype, "product", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: ListingPolicyCheckDto }),
+    __metadata("design:type", ListingPolicyCheckDto)
+], ListingCopyResultDto.prototype, "policy", void 0);
 class ListingSeoAspectDto {
     name;
     value;

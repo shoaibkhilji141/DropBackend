@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { CacheService } from '../common/cache/cache.service';
 import { LinkStatus, Platform, Product, ProductStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { liveProductWhere } from '../common/demo-data';
@@ -56,6 +57,7 @@ export class ProductsService {
     private readonly accounts: IntegrationAccountsService,
     @Inject(SUPPLIER_PRODUCT_PROVIDER)
     private readonly supplier: SupplierProductProvider,
+    private readonly cache: CacheService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -63,18 +65,26 @@ export class ProductsService {
   // -------------------------------------------------------------------------
 
   async searchSupplier(query: SearchSupplierProductsDto): Promise<ResearchSearchResultView> {
-    const supplierSort = this.supplierSort(query.sort);
-    const result = await this.supplier.search({
-      search: query.search,
-      category: query.category,
-      supplier: query.supplier,
-      minCostPrice: query.minCostPrice,
-      maxCostPrice: query.maxCostPrice,
-      minRating: query.minRating,
-      minOrders: query.minOrders,
-      inStockOnly: query.inStockOnly,
-      sort: supplierSort,
-    });
+    const requestedSort = query.sort ?? 'ordersDesc';
+    const supplierSort = this.supplierSort(requestedSort) ?? 'ordersDesc';
+    const page = Math.max(query.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(query.pageSize ?? 24, 1), 60);
+    const cacheKey = this.cache.key('ali:search:sold', { ...query, sort: supplierSort, page, pageSize });
+    const result = await this.cache.wrap(cacheKey, 90_000, () =>
+      this.supplier.search({
+        search: query.search,
+        category: query.category,
+        supplier: query.supplier,
+        minCostPrice: query.minCostPrice,
+        maxCostPrice: query.maxCostPrice,
+        minRating: query.minRating,
+        minOrders: query.minOrders,
+        inStockOnly: query.inStockOnly,
+        sort: supplierSort,
+        page,
+        pageSize,
+      }),
+    );
 
     const savedByExternalId = await this.savedLookup(
       result.items.map((product) => product.externalId),
@@ -95,18 +105,15 @@ export class ProductsService {
       return true;
     });
 
-    items = this.applyDerivedSort(items, query.sort);
-
-    const page = query.page ?? 1;
-    const pageSize = query.pageSize ?? 12;
-    const start = (page - 1) * pageSize;
+    items = this.applyDerivedSort(items, requestedSort);
+    const total = Math.max(result.total ?? items.length, (page - 1) * pageSize + items.length);
 
     return {
-      items: items.slice(start, start + pageSize),
-      total: items.length,
+      items,
+      total,
       page,
       pageSize,
-      pageCount: Math.max(1, Math.ceil(items.length / pageSize)),
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
       facets: result.facets,
     };
   }

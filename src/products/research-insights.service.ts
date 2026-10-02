@@ -30,6 +30,7 @@ import { ListingsService } from '../listings/listings.service';
 import { ListingView } from '../listings/listings.types';
 import { ProfitService } from '../profit/profit.service';
 import { UsersService } from '../users/users.service';
+import { scanEbayUkPolicy } from '../ai/ebay-listing-policy';
 import { ListOnEbayDto, MatchAliExpressQueryDto } from './dto/product.dto';
 import {
   minePhrases,
@@ -39,6 +40,7 @@ import {
 import { ProductsService } from './products.service';
 import { ProductView, ResearchSearchResultView } from './products.types';
 import {
+  AliExpressInsightView,
   EbayItemInsightView,
   KeywordInsightsView,
   KeywordRow,
@@ -97,11 +99,14 @@ export class ResearchInsightsService {
     condition?: string;
     sort?: string;
     limit?: number;
+    page?: number;
   }) {
-    const limit = Math.min(Math.max(query.limit ?? 24, 1), 80);
-    const key = this.cache.key('ebay:search', { ...query, limit });
+    const limit = Math.min(Math.max(query.limit ?? 24, 1), 50);
+    const page = Math.min(Math.max(query.page ?? 1, 1), 200);
+    const offset = (page - 1) * limit;
+    const key = this.cache.key('ebay:search', { ...query, limit, page });
     const result = await this.cache.wrap(key, SEARCH_TTL_MS, () =>
-      this.ebay.searchMarketplace({ ...query, limit }),
+      this.ebay.searchMarketplace({ ...query, limit, offset }),
     );
     // Do not keep a page of 0-sold cards if enrichment failed this turn.
     if (result.items.length > 0 && result.items.every((item) => !item.soldCount)) {
@@ -125,7 +130,7 @@ export class ResearchInsightsService {
 
     const [competitors, suggestions, categoryAspects, snapshots] = await Promise.all([
       this.cache.wrap(`ebay:competitors:${seed}`, SEARCH_TTL_MS, () =>
-        this.ebayClient.searchMarketplace({ q: seed, limit: 20, sort: 'sold' }),
+        this.ebayClient.searchMarketplace({ q: seed, limit: 20, sort: 'sold' }).then((result) => result.items),
       ),
       this.cache.wrap(`ebay:suggest:${seed}`, SUGGEST_TTL_MS, () =>
         this.ebayClient.searchSuggestions(seed),
@@ -153,6 +158,86 @@ export class ResearchInsightsService {
       sales,
       keywords,
       seo,
+    };
+  }
+
+  async getAliExpressInsight(externalId: string): Promise<AliExpressInsightView> {
+    const trimmed = externalId.trim();
+    if (!trimmed) throw new BadRequestException('An AliExpress product id is required.');
+
+    const product = await this.cache.wrap(`ali:item:${trimmed}`, ITEM_TTL_MS, () =>
+      this.products.getSupplierProduct(trimmed),
+    );
+    const seed = searchSeed(product.title, 4) || product.title.slice(0, 40);
+
+    const [similarResult, ebayResult] = await Promise.all([
+      this.products.searchSupplier({ search: seed, sort: 'ordersDesc', page: 1, pageSize: 8 }),
+      this.cache.wrap(`ebay:for-ali:${seed}`, SEARCH_TTL_MS, () =>
+        this.ebay.searchMarketplace({ q: seed, limit: 8, sort: 'sold' }).catch((error: unknown) => {
+          this.logger.warn(
+            `eBay match for AliExpress insight failed: ${error instanceof Error ? error.message : error}`,
+          );
+          return {
+            items: [],
+            marketplace: this.marketplaceId(),
+            page: 1,
+            pageSize: 8,
+            pageCount: 1,
+            total: 0,
+          };
+        }),
+      ),
+    ]);
+
+    const similar = similarResult.items
+      .filter((item) => item.externalId !== product.externalId)
+      .slice(0, 6);
+
+    const mined = minePhrases(
+      [
+        { title: product.title, soldCount: product.orders },
+        ...similar.map((item) => ({ title: item.title, soldCount: item.orders })),
+      ],
+      { minListings: 1, limit: 20 },
+    );
+    const sampleUnitsSold = Math.max(mined.sampleUnitsSold, 1);
+    const topPhrases: KeywordRow[] = mined.phrases.map((phrase) => ({
+      phrase: phrase.phrase,
+      words: phrase.words,
+      listings: phrase.listings,
+      unitsSold: phrase.unitsSold,
+      soldShare: Number((phrase.unitsSold / sampleUnitsSold).toFixed(3)),
+      inTitle: titleContainsPhrase(product.title, phrase.phrase),
+      source: 'competitors',
+    }));
+
+    const specs = (product.specs ?? []).map((spec) => `${spec.name}: ${spec.value}`);
+    const policy = scanEbayUkPolicy({
+      title: product.title,
+      description: product.description,
+      category: product.category,
+      specs,
+      variants: (product.variants ?? []).map((variant) => variant.attributes || variant.name),
+      costPrice: product.costPrice,
+      currency: product.currency,
+    });
+
+    return {
+      product,
+      ebayQuery: seed,
+      similar,
+      ebayMatches: ebayResult.items,
+      keywords: {
+        seed,
+        sampleListings: mined.sampleListings,
+        sampleUnitsSold: mined.sampleUnitsSold,
+        topPhrases,
+        missingFromTitle: topPhrases.filter((row) => !row.inTitle).slice(0, 10),
+        buyerSearches: [],
+        aiKeywords: [],
+        note: 'Phrases mined from this product and similar AliExpress titles, weighted by order volume.',
+      },
+      policy,
     };
   }
 

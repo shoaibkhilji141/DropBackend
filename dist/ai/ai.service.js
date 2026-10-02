@@ -17,6 +17,7 @@ const aliexpress_api_provider_1 = require("../integrations/aliexpress/aliexpress
 const openai_service_1 = require("../integrations/openai/openai.service");
 const profit_service_1 = require("../profit/profit.service");
 const users_service_1 = require("../users/users.service");
+const ebay_listing_policy_1 = require("./ebay-listing-policy");
 const SELLER_VOICE = 'You write listing copy for an AliExpress-to-eBay dropshipping seller. Be accurate, commercial and specific. Never invent certifications, brand affiliations or measurements that are not in the source.';
 let AiService = class AiService {
     openai;
@@ -117,6 +118,20 @@ let AiService = class AiService {
         const title = this.openai.requireString(payload, 'title').replace(/\s+/g, ' ').trim().slice(0, 80);
         const description = this.openai.requireString(payload, 'description');
         const suggested = this.profit.suggestSellPrice(product.costPrice, product.shippingCost);
+        const policyInput = {
+            title: product.title,
+            description: plainDescription,
+            category: product.category,
+            specs,
+            variants: variantLines,
+            generatedTitle: title,
+            generatedDescription: description,
+            costPrice: product.costPrice,
+            currency: product.currency,
+        };
+        const rules = (0, ebay_listing_policy_1.scanEbayUkPolicy)(policyInput);
+        const aiPolicy = await this.reviewListingPolicy(dto, policyInput);
+        const policy = (0, ebay_listing_policy_1.mergePolicy)(rules, aiPolicy ?? (0, ebay_listing_policy_1.parseAiPolicy)(payload));
         return {
             requestId: result.requestId,
             model: result.model,
@@ -127,6 +142,7 @@ let AiService = class AiService {
             keywords: this.stringList(payload, 'keywords').slice(0, 16),
             highlights: this.stringList(payload, 'highlights').slice(0, 8),
             product: this.copyProduct(product, suggested),
+            policy,
         };
     }
     async generateListingSeo(input) {
@@ -250,6 +266,20 @@ Never invent brands, certifications, warranties or measurements that are absent 
         if (dto.description)
             lines.push(`Existing description:\n${dto.description.trim()}`);
         return lines.join('\n');
+    }
+    async reviewListingPolicy(dto, input) {
+        try {
+            const prompt = (0, ebay_listing_policy_1.policyReviewPrompt)(input);
+            const result = await this.runText(client_1.AIRequestType.IMPROVE_DESCRIPTION, dto, {
+                system: prompt.system,
+                user: prompt.user,
+                extract: (payload) => JSON.stringify(payload),
+            });
+            return (0, ebay_listing_policy_1.parseAiPolicy)(this.openai.parseJsonObject(result.content));
+        }
+        catch {
+            return null;
+        }
     }
     async runText(type, dto, spec) {
         const { request, completion, payload } = await this.execute(type, dto, spec.system, spec.user);

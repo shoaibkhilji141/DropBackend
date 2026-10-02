@@ -36,10 +36,14 @@ let ResearchController = class ResearchController {
             condition: query.condition,
             sort: query.sort,
             limit: query.limit,
+            page: query.page,
         });
     }
     getEbayInsight(itemId) {
         return this.insights.getInsight(itemId);
+    }
+    getAliExpressInsight(externalId) {
+        return this.insights.getAliExpressInsight(externalId);
     }
     matchAliExpress(query) {
         return this.insights.matchAliExpress(query);
@@ -82,6 +86,17 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", void 0)
 ], ResearchController.prototype, "getEbayInsight", null);
+__decorate([
+    (0, common_1.Get)('aliexpress/insight'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Keywords, similar products, eBay UK matches and policy for one AliExpress product',
+    }),
+    openapi.ApiResponse({ status: 200, type: Object }),
+    __param(0, (0, common_1.Query)('externalId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], ResearchController.prototype, "getAliExpressInsight", null);
 __decorate([
     (0, common_1.Get)('aliexpress/match'),
     (0, swagger_1.ApiOperation)({ summary: 'Find AliExpress products that match an eBay listing by text or image' }),

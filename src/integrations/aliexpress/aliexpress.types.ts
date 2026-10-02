@@ -62,6 +62,8 @@ export interface SupplierSearchQuery {
   minOrders?: number;
   inStockOnly?: boolean;
   sort?: SupplierSortOption;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface SupplierFacet {
@@ -71,6 +73,9 @@ export interface SupplierFacet {
 
 export interface SupplierSearchResult {
   items: SupplierProduct[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
   /** Facets are calculated on the full match set, before pagination. */
   facets: {
     categories: SupplierFacet[];

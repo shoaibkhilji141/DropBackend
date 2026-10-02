@@ -270,41 +270,40 @@ export class AliExpressApiClient {
 
   async search(accessToken: string, query: SupplierSearchQuery): Promise<SupplierSearchResult> {
     const keyword = query.search?.trim();
-    const sortByOrders = !query.sort || query.sort === 'ordersDesc';
     if (query.imageUrl) {
       const visual = await this.searchByImage(accessToken, query.imageUrl, keyword);
       if (visual.length > 0) {
-        if (sortByOrders) visual.sort((a, b) => b.orders - a.orders);
+        if ((query.sort ?? 'ordersDesc') === 'ordersDesc') {
+          visual.sort((a, b) => b.orders - a.orders);
+        }
         return { items: visual, facets: { categories: [], suppliers: [] } };
       }
     }
-    if (!keyword) {
-      const recommended = await this.recommend(accessToken);
-      if (recommended.length > 0 && recommended.some((item) => item.orders > 0)) {
-        return { items: recommended, facets: { categories: [], suppliers: [] } };
-      }
-    }
-
+    const page = Math.max(query.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(query.pageSize ?? 24, 1), 50);
+    const sort = query.sort ?? 'ordersDesc';
     const attempts: Record<string, string | number | boolean | undefined>[] = [
       {
-        keyWord: keyword || 'best selling',
+        keyWord: keyword || query.category || 'best selling',
         local: 'en_GB',
         countryCode: 'GB',
         currency: 'GBP',
-        sortBy: this.mapSort(query.sort ?? 'ordersDesc'),
-        pageIndex: 1,
-        pageSize: 40,
-      },
-      {
-        keyWord: keyword || 'electronics',
-        local: 'en_GB',
-        countryCode: 'GB',
-        currency: 'GBP',
-        sortBy: this.mapSort(query.sort ?? 'ordersDesc'),
-        pageIndex: 1,
-        pageSize: 40,
+        sortBy: this.mapSort(sort),
+        pageIndex: page,
+        pageSize,
       },
     ];
+    if (page === 1 && !keyword) {
+      attempts.push({
+        keyWord: 'electronics',
+        local: 'en_GB',
+        countryCode: 'GB',
+        currency: 'GBP',
+        sortBy: this.mapSort(sort),
+        pageIndex: 1,
+        pageSize,
+      });
+    }
 
     let lastError = '';
     for (const business of attempts) {
@@ -313,15 +312,31 @@ export class AliExpressApiClient {
         .map((row) => this.mapSearchRow(row))
         .filter((item): item is SupplierProduct => item !== null);
       if (items.length > 0) {
-        if (sortByOrders) items.sort((a, b) => b.orders - a.orders);
-        return { items, facets: { categories: [], suppliers: [] } };
+        const ranked = this.applySort(items, sort);
+        const total = Math.max(this.extractTotal(result.payload), (page - 1) * pageSize + ranked.length);
+        return {
+          items: ranked,
+          total,
+          page,
+          pageSize,
+          facets: this.facetsFrom(ranked),
+        };
       }
       if (!result.ok) lastError = result.error || lastError;
     }
 
-    const recommended = await this.recommend(accessToken);
-    if (recommended.length > 0) {
-      return { items: recommended, facets: { categories: [], suppliers: [] } };
+    if (page === 1) {
+      const recommended = await this.recommend(accessToken);
+      if (recommended.length > 0) {
+        const ranked = this.applySort(recommended, sort).slice(0, pageSize);
+        return {
+          items: ranked,
+          total: recommended.length,
+          page: 1,
+          pageSize,
+          facets: this.facetsFrom(ranked),
+        };
+      }
     }
 
     throw new Error(
@@ -610,6 +625,37 @@ export class AliExpressApiClient {
     return undefined;
   }
 
+  private extractTotal(payload: Record<string, unknown>): number {
+    const candidates = [
+      this.dig(payload, ['aliexpress_ds_text_search_response', 'data', 'totalCount']),
+      this.dig(payload, ['aliexpress_ds_text_search_response', 'data', 'total_record_count']),
+      this.dig(payload, ['aliexpress_ds_text_search_response', 'result', 'totalCount']),
+      this.dig(payload, ['aliexpress_ds_text_search_response', 'result', 'total_record_count']),
+      this.dig(payload, ['result', 'totalCount']),
+      this.dig(payload, ['data', 'totalCount']),
+      this.dig(payload, ['totalCount']),
+      this.dig(payload, ['total_record_count']),
+    ];
+    for (const candidate of candidates) {
+      const value = Number(candidate);
+      if (Number.isFinite(value) && value > 0) return Math.floor(value);
+    }
+    return 0;
+  }
+
+  private facetsFrom(items: SupplierProduct[]): SupplierSearchResult['facets'] {
+    const categories = new Map<string, number>();
+    const suppliers = new Map<string, number>();
+    for (const item of items) {
+      if (item.category) categories.set(item.category, (categories.get(item.category) ?? 0) + 1);
+      if (item.supplier.name) suppliers.set(item.supplier.name, (suppliers.get(item.supplier.name) ?? 0) + 1);
+    }
+    return {
+      categories: [...categories.entries()].map(([value, count]) => ({ value, count })),
+      suppliers: [...suppliers.entries()].map(([value, count]) => ({ value, count })),
+    };
+  }
+
   private extractList(payload: Record<string, unknown>): Record<string, unknown>[] {
     const candidates = [
       this.dig(payload, ['aliexpress_ds_text_search_response', 'data', 'products', 'product']),
@@ -644,7 +690,7 @@ export class AliExpressApiClient {
       stock: this.num(row.stock ?? 1) || 1,
       rating: this.num(row.evaluateRate ?? row.avg_evaluate_rate),
       reviews: this.num(row.totalEvaluationRate ?? row.evaluation_count),
-      orders: this.num(row.orders ?? row.lastest_volume),
+      orders: this.extractOrders(row),
       category: String(row.categoryName ?? row.second_level_category_name ?? 'General'),
       shippingEtaDays: 15,
       shippingOptions: [],
@@ -715,7 +761,7 @@ export class AliExpressApiClient {
       stock,
       rating: this.num(base.avg_evaluation_rating),
       reviews: this.num(base.evaluation_count),
-      orders: this.num(base.sales_count ?? base.order_count),
+      orders: this.extractOrders({ ...result, ...base }),
       category: String(base.category_name ?? 'General'),
       shippingEtaDays: 15,
       shippingOptions: [],
@@ -751,10 +797,58 @@ export class AliExpressApiClient {
   }
 
   private mapSort(sort?: string): string {
-    if (sort === 'costAsc') return 'priceAsc';
-    if (sort === 'costDesc') return 'priceDesc';
-    if (sort === 'ordersDesc') return 'ordersDesc';
-    return 'bestMatch';
+    if (sort === 'costAsc') return 'minPrice';
+    if (sort === 'costDesc') return 'maxPrice';
+    if (sort === 'ordersDesc') return 'orders';
+    return 'newest';
+  }
+
+  private applySort(items: SupplierProduct[], sort?: string): SupplierProduct[] {
+    const ranked = [...items];
+    if (sort === 'relevance') return items;
+    if (sort === 'costAsc') return ranked.sort((a, b) => a.costPrice - b.costPrice);
+    if (sort === 'costDesc') return ranked.sort((a, b) => b.costPrice - a.costPrice);
+    if (sort === 'ratingDesc') return ranked.sort((a, b) => b.rating - a.rating);
+    return ranked.sort((a, b) => b.orders - a.orders);
+  }
+
+  private extractOrders(row: Record<string, unknown>): number {
+    const candidates = [
+      row.orders,
+      row.lastest_volume,
+      row.lastestVolume,
+      row.latest_volume,
+      row.latestVolume,
+      row.sales_count,
+      row.salesCount,
+      row.sold_count,
+      row.soldCount,
+      row.order_count,
+      row.orderCount,
+      row.volume,
+      row.itemSold,
+      row.tradeCount,
+      row.totalSold,
+    ];
+    for (const candidate of candidates) {
+      const value = this.parseCount(candidate);
+      if (value > 0) return value;
+    }
+    return 0;
+  }
+
+  private parseCount(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+    if (typeof value !== 'string') return this.num(value);
+    const cleaned = value.trim().toLowerCase().replace(/,/g, '');
+    const compact = cleaned.replace(/\+$/, '');
+    const thousand = compact.match(/^([\d.]+)\s*k$/);
+    if (thousand) return Math.floor(Number(thousand[1]) * 1000);
+    const million = compact.match(/^([\d.]+)\s*m$/);
+    if (million) return Math.floor(Number(million[1]) * 1_000_000);
+    const digits = compact.replace(/[^\d.]/g, '');
+    const parsed = Number(digits);
+    return Number.isFinite(parsed) ? Math.floor(parsed) : 0;
   }
 
   private dig(value: unknown, path: string[]): unknown {

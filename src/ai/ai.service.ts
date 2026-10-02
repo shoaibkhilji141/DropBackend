@@ -6,6 +6,7 @@ import { SupplierProduct } from '../integrations/aliexpress/aliexpress.types';
 import { OpenAIService } from '../integrations/openai/openai.service';
 import { ProfitService } from '../profit/profit.service';
 import { UsersService } from '../users/users.service';
+import { mergePolicy, parseAiPolicy, policyReviewPrompt, scanEbayUkPolicy } from './ebay-listing-policy';
 import {
   AiListResultDto,
   AiStatusDto,
@@ -126,6 +127,20 @@ export class AiService {
     const title = this.openai.requireString(payload, 'title').replace(/\s+/g, ' ').trim().slice(0, 80);
     const description = this.openai.requireString(payload, 'description');
     const suggested = this.profit.suggestSellPrice(product.costPrice, product.shippingCost);
+    const policyInput = {
+      title: product.title,
+      description: plainDescription,
+      category: product.category,
+      specs,
+      variants: variantLines,
+      generatedTitle: title,
+      generatedDescription: description,
+      costPrice: product.costPrice,
+      currency: product.currency,
+    };
+    const rules = scanEbayUkPolicy(policyInput);
+    const aiPolicy = await this.reviewListingPolicy(dto, policyInput);
+    const policy = mergePolicy(rules, aiPolicy ?? parseAiPolicy(payload));
 
     return {
       requestId: result.requestId,
@@ -137,6 +152,7 @@ export class AiService {
       keywords: this.stringList(payload, 'keywords').slice(0, 16),
       highlights: this.stringList(payload, 'highlights').slice(0, 8),
       product: this.copyProduct(product, suggested),
+      policy,
     };
   }
 
@@ -278,6 +294,23 @@ Never invent brands, certifications, warranties or measurements that are absent 
     if (dto.keywords?.length) lines.push(`Existing keywords: ${dto.keywords.join(', ')}`);
     if (dto.description) lines.push(`Existing description:\n${dto.description.trim()}`);
     return lines.join('\n');
+  }
+
+  private async reviewListingPolicy(
+    dto: GenerateAiContentDto,
+    input: Parameters<typeof policyReviewPrompt>[0],
+  ) {
+    try {
+      const prompt = policyReviewPrompt(input);
+      const result = await this.runText(AIRequestType.IMPROVE_DESCRIPTION, dto, {
+        system: prompt.system,
+        user: prompt.user,
+        extract: (payload) => JSON.stringify(payload),
+      });
+      return parseAiPolicy(this.openai.parseJsonObject(result.content));
+    } catch {
+      return null;
+    }
   }
 
   private async runText(

@@ -15,8 +15,19 @@ export interface OpenAICompletion {
 }
 
 const GROQ_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+const GEMINI_MODELS = ['gemini-3.8-flash'];
 const OPENAI_MODELS = ['gpt-4o-mini', 'gpt-4o'];
+const RETIRED_GEMINI = /gemini-1\.5|gemini-2\.0|gemini-2\.5|gemini-flash-latest/i;
+const CURRENT_GEMINI = 'gemini-3.8-flash';
+
+class ProviderSkipError extends Error {
+  constructor(
+    message: string,
+    readonly retryAt?: Date,
+  ) {
+    super(message);
+  }
+}
 
 export interface AiModelOption {
   id: string;
@@ -32,6 +43,7 @@ export interface AiModelOption {
 export class OpenAIService {
   private readonly logger = new Logger(OpenAIService.name);
   private readonly clients = new Map<string, OpenAI>();
+  private geminiCooldownUntil = 0;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -77,11 +89,20 @@ export class OpenAIService {
 
     const selected = this.resolveSelection(model, providers);
     if (selected) {
-      return this.completeWith(selected.provider, system, user, selected.model);
+      try {
+        return await this.completeWith(selected.provider, system, user, selected.model);
+      } catch (error) {
+        throw new BadGatewayException(this.publicError(error, selected.provider.name));
+      }
     }
 
     let lastError = '';
     for (const provider of providers) {
+      if (provider.name === 'gemini' && Date.now() < this.geminiCooldownUntil) {
+        lastError = this.geminiQuotaMessage();
+        this.logger.warn(`gemini skipped until ${new Date(this.geminiCooldownUntil).toISOString()}: ${lastError}`);
+        continue;
+      }
       try {
         return await this.completeWith(provider, system, user);
       } catch (error) {
@@ -117,13 +138,37 @@ export class OpenAIService {
       );
     }
 
-    return { provider, model: modelName };
+    return {
+      provider,
+      model:
+        provider.name === 'gemini'
+          ? this.resolveGeminiModel(modelName)
+          : provider.name === 'groq'
+            ? this.resolveGroqModel(modelName)
+            : modelName,
+    };
   }
 
   private modelsFor(provider: AiProviderConfig['name'], configured?: string): string[] {
     const extras =
       provider === 'groq' ? GROQ_MODELS : provider === 'gemini' ? GEMINI_MODELS : OPENAI_MODELS;
-    return Array.from(new Set([configured, ...extras].filter((item): item is string => Boolean(item))));
+    const configuredModel =
+      provider === 'gemini'
+        ? this.resolveGeminiModel(configured)
+        : provider === 'groq'
+          ? this.resolveGroqModel(configured)
+          : configured;
+    return Array.from(new Set([configuredModel, ...extras].filter((item): item is string => Boolean(item))));
+  }
+
+  private resolveGeminiModel(model?: string): string {
+    if (!model || RETIRED_GEMINI.test(model)) return CURRENT_GEMINI;
+    return model;
+  }
+
+  private resolveGroqModel(model?: string): string {
+    if (!model || /llama-3\.[13]|llama-3\.3|llama-3\.1/i.test(model)) return GROQ_MODELS[1] ?? GROQ_MODELS[0];
+    return model;
   }
 
   private providerLabel(provider: AiProviderConfig['name']): string {
@@ -186,9 +231,9 @@ export class OpenAIService {
     }
 
     const models = modelOverride
-      ? [modelOverride]
+      ? [provider.name === 'groq' ? this.resolveGroqModel(modelOverride) : modelOverride]
       : provider.name === 'groq'
-        ? Array.from(new Set([provider.model, ...GROQ_MODELS]))
+        ? this.modelsFor('groq', provider.model)
         : [provider.model];
 
     let lastError: unknown;
@@ -242,9 +287,7 @@ export class OpenAIService {
     user: string,
     modelOverride?: string,
   ): Promise<OpenAICompletion> {
-    const models = modelOverride
-      ? [modelOverride]
-      : Array.from(new Set([provider.model, ...GEMINI_MODELS]));
+    const models = [this.resolveGeminiModel(modelOverride ?? provider.model)];
     let lastError: unknown;
     for (const model of models) {
       try {
@@ -252,12 +295,7 @@ export class OpenAIService {
       } catch (error) {
         lastError = error;
         this.logger.warn(`gemini native ${model} failed: ${this.publicError(error, 'gemini')}`);
-      }
-      try {
-        return await this.completeOpenAiCompatible(provider, model, system, user, true);
-      } catch (error) {
-        lastError = error;
-        this.logger.warn(`gemini openai-compat ${model} failed: ${this.publicError(error, 'gemini')}`);
+        if (error instanceof ProviderSkipError) throw error;
       }
     }
     throw lastError instanceof Error ? lastError : new Error('Gemini request failed.');
@@ -285,7 +323,7 @@ export class OpenAIService {
       usageMetadata?: { totalTokenCount?: number };
     };
     if (!response.ok) {
-      throw new Error(payload.error?.message || `Gemini request failed (${response.status}).`);
+      throw this.geminiHttpError(response.status, payload.error?.message);
     }
     const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim() ?? '';
     if (!text) {
@@ -310,17 +348,56 @@ export class OpenAIService {
     return client;
   }
 
+  private geminiHttpError(status: number, message?: string): Error {
+    const detail = message ?? '';
+    if (status === 429 || /quota|RESOURCE_EXHAUSTED|rate-limit/i.test(detail)) {
+      this.geminiCooldownUntil = Date.now() + this.retryMs(detail);
+      return new ProviderSkipError(this.geminiQuotaMessage(this.geminiCooldownUntil));
+    }
+    if (status === 404 || /no longer available|NOT_FOUND/i.test(detail)) {
+      return new Error(
+        `Gemini model is retired. Use ${CURRENT_GEMINI} from the model dropdown, or pick Groq.`,
+      );
+    }
+    if (status === 401) return new Error('Gemini rejected the configured API key.');
+    return new Error(`Gemini request failed (${status}).`);
+  }
+
+  private geminiQuotaMessage(until = this.geminiCooldownUntil): string {
+    const wait = until > Date.now() ? ` Retry after ${new Date(until).toLocaleTimeString()}.` : '';
+    return `Gemini free daily quota is used up (20 requests). Pick a Groq model, or wait.${wait}`;
+  }
+
+  private retryMs(detail: string): number {
+    const hours = /retry in (\d+)h/i.exec(detail);
+    const minutes = /(?:retry in \d+h)?(\d+)m/i.exec(detail);
+    const fromHours = hours ? Number(hours[1]) * 60 * 60 * 1000 : 0;
+    const fromMinutes = minutes ? Number(minutes[1]) * 60 * 1000 : 0;
+    return Math.max(fromHours + fromMinutes, 15 * 60 * 1000);
+  }
+
   private publicError(error: unknown, provider: string): string {
     const name = provider === 'gemini' ? 'Gemini' : provider === 'groq' ? 'Groq' : 'OpenAI';
+    if (error instanceof ProviderSkipError) return error.message;
     if (error instanceof APIError) {
       const detail = error.message ?? '';
       if (error.status === 401) return `${name} rejected the configured API key.`;
       if (error.status === 404) return `${name} model was not found.`;
       if (error.status === 429 && /credit|quota|billing/i.test(detail)) {
+        if (provider === 'gemini') {
+          this.geminiCooldownUntil = Date.now() + this.retryMs(detail);
+          return this.geminiQuotaMessage();
+        }
         return `${name} has no credits remaining.`;
       }
       if (error.status === 429) return `${name} rate limit reached.`;
       return `${name} request failed (${error.status ?? 'unknown status'}).`;
+    }
+    if (error instanceof Error && /quota|RESOURCE_EXHAUSTED/i.test(error.message)) {
+      return this.geminiHttpError(429, error.message).message;
+    }
+    if (error instanceof Error && /no longer available|NOT_FOUND/i.test(error.message)) {
+      return this.geminiHttpError(404, error.message).message;
     }
     return error instanceof Error ? error.message : `${name} request failed.`;
   }

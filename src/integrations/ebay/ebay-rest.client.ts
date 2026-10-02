@@ -3,9 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { EbayConfig } from '../../config/configuration';
 import {
   MarketplaceAccountInfo,
+  MarketplaceListingAspect,
   MarketplaceListingInput,
   MarketplaceOrder,
   MarketplacePublishResult,
+  MarketplaceVariationListingInput,
   OAuthTokenSet,
   SellerListing,
 } from '../marketplace/marketplace.types';
@@ -26,6 +28,9 @@ const EBAY_SCOPES = [
   'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
   'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
 ];
+
+/** Browse's bulk item endpoint accepts at most 20 item ids per request. */
+const BULK_ITEM_LIMIT = 20;
 
 export interface EbayResearchQuery {
   q?: string;
@@ -55,11 +60,91 @@ export interface EbayMarketplaceItem {
   endedAt?: Date;
 }
 
+export interface EbayItemAspect {
+  name: string;
+  value: string;
+}
+
+export interface EbayCategoryAspect {
+  name: string;
+  required: boolean;
+  /** eBay's own guidance: aspects it uses for search relevance. */
+  usedForSearch: boolean;
+  allowsFreeText: boolean;
+  values: string[];
+}
+
+/** Everything the research detail page needs about one live eBay listing. */
+export interface EbayItemDetail {
+  itemId: string;
+  legacyItemId: string | null;
+  title: string;
+  subtitle: string | null;
+  images: string[];
+  price: number;
+  currency: string;
+  itemUrl: string;
+  purchaseHistoryUrl: string | null;
+  condition: string | null;
+  sellerUsername: string | null;
+  sellerFeedbackPercentage: number | null;
+  sellerFeedbackScore: number | null;
+  topRatedSeller: boolean;
+  categoryId: string | null;
+  categoryPath: string[];
+  brand: string | null;
+  mpn: string | null;
+  aspects: EbayItemAspect[];
+  descriptionHtml: string | null;
+  shortDescription: string | null;
+  soldCount: number;
+  availableQuantity: number | null;
+  shippingCost: number | null;
+  shippingService: string | null;
+  itemLocation: string | null;
+  returnsAccepted: boolean | null;
+  listingStartedAt: string | null;
+  listingAgeDays: number | null;
+}
+
 interface BrowseItemPayload {
   itemId?: string;
   legacyItemId?: string;
   itemCreationDate?: string;
   estimatedAvailabilities?: { estimatedSoldQuantity?: number }[];
+}
+
+interface BrowseItemDetailPayload extends BrowseItemPayload {
+  title?: string;
+  subtitle?: string;
+  shortDescription?: string;
+  description?: string;
+  price?: { value?: string; currency?: string };
+  image?: { imageUrl?: string };
+  additionalImages?: { imageUrl?: string }[];
+  itemWebUrl?: string;
+  condition?: string;
+  categoryId?: string;
+  categoryPath?: string;
+  brand?: string;
+  mpn?: string;
+  localizedAspects?: { name?: string; value?: string }[];
+  seller?: {
+    username?: string;
+    feedbackPercentage?: string;
+    feedbackScore?: number;
+  };
+  topRatedBuyingExperience?: boolean;
+  returnTerms?: { returnsAccepted?: boolean };
+  itemLocation?: { city?: string; stateOrProvince?: string; country?: string };
+  shippingOptions?: {
+    shippingCost?: { value?: string; currency?: string };
+    shippingServiceCode?: string;
+  }[];
+  estimatedAvailabilities?: {
+    estimatedSoldQuantity?: number;
+    estimatedAvailableQuantity?: number;
+  }[];
 }
 
 @Injectable()
@@ -135,7 +220,7 @@ export class EbayRestClient {
 
   async searchMarketplace(query: string | EbayResearchQuery = {}): Promise<EbayMarketplaceItem[]> {
     const filters: EbayResearchQuery = typeof query === 'string' ? { q: query } : query;
-    const limit = Math.min(Math.max(filters.limit ?? 80, 1), 80);
+    const limit = Math.min(Math.max(filters.limit ?? 24, 1), 80);
     const items = await this.searchBrowse(filters, Math.min(limit, 50));
     return this.sortResearchItems(await this.enrichListingSold(items), filters.sort);
   }
@@ -358,18 +443,33 @@ export class EbayRestClient {
     };
   }
 
+  /**
+   * Fills in sold quantity and listing age using Browse's bulk item endpoint.
+   * One request covers 20 items, so a full page of results costs ~3 calls
+   * instead of one call per listing.
+   */
   private async enrichListingSold(items: EbayMarketplaceItem[]): Promise<EbayMarketplaceItem[]> {
     const details = new Map<string, { sold: number; start?: Date }>();
     const ids = items.map((item) => item.itemId).filter((id) => id.startsWith('v1|'));
-    const concurrency = 6;
-    for (let offset = 0; offset < Math.min(ids.length, 36); offset += concurrency) {
-      const batch = ids.slice(offset, offset + concurrency);
-      const rows = await Promise.all(batch.map((id) => this.browseGetItem(id)));
-      for (const row of rows) {
-        if (!row) continue;
-        details.set(row.itemId, row);
-        if (row.legacyId) details.set(row.legacyId, row);
-      }
+    const chunks: string[][] = [];
+    for (let offset = 0; offset < ids.length; offset += BULK_ITEM_LIMIT) {
+      chunks.push(ids.slice(offset, offset + BULK_ITEM_LIMIT));
+    }
+
+    const batches = await Promise.all(
+      chunks.map((chunk) =>
+        this.browseGetItems(chunk).catch((error: unknown) => {
+          this.logger.warn(
+            `Browse bulk getItems failed: ${error instanceof Error ? error.message : error}`,
+          );
+          return [];
+        }),
+      ),
+    );
+
+    for (const row of batches.flat()) {
+      details.set(row.itemId, row);
+      if (row.legacyId) details.set(row.legacyId, row);
     }
     if (details.size === 0) return items;
 
@@ -390,23 +490,190 @@ export class EbayRestClient {
     });
   }
 
-  private async browseGetItem(
-    itemId: string,
-  ): Promise<{ itemId: string; legacyId?: string; sold: number; start?: Date } | null> {
+  /**
+   * Full detail for one listing. Browse keyed on the RESTful `v1|...|0` id, or
+   * on the legacy numeric id when the caller only has an eBay item number.
+   */
+  async getItemDetail(itemId: string): Promise<EbayItemDetail> {
+    const token = await this.applicationToken();
+    const numeric = this.numericItemId(itemId);
+    const url =
+      itemId.startsWith('v1|')
+        ? `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`
+        : `${this.hosts().api}/buy/browse/v1/item/get_item_by_legacy_id?${new URLSearchParams({
+            legacy_item_id: numeric || itemId,
+          }).toString()}`;
+    const payload = await this.request<BrowseItemDetailPayload>('GET', url, token);
+    return this.mapItemDetail(payload, itemId);
+  }
+
+  private mapItemDetail(payload: BrowseItemDetailPayload, requestedId: string): EbayItemDetail {
+    const itemId = String(payload.itemId ?? requestedId);
+    const legacyItemId = payload.legacyItemId
+      ? String(payload.legacyItemId)
+      : this.numericItemId(itemId) || null;
+    const availability = payload.estimatedAvailabilities?.[0];
+    const start = this.parseFindingDate(payload.itemCreationDate);
+    const age = start ? Math.max(0, Math.round((Date.now() - start.getTime()) / 86_400_000)) : null;
+    const images = [
+      payload.image?.imageUrl,
+      ...(payload.additionalImages ?? []).map((image) => image.imageUrl),
+    ].filter((url): url is string => typeof url === 'string' && url.length > 0);
+    const shipping = payload.shippingOptions?.[0];
+    const feedback = Number(payload.seller?.feedbackPercentage ?? NaN);
+
+    return {
+      itemId,
+      legacyItemId,
+      title: String(payload.title ?? 'eBay item'),
+      subtitle: payload.subtitle ?? null,
+      images: [...new Set(images)],
+      price: Number(payload.price?.value ?? 0),
+      currency: payload.price?.currency ?? this.currency(),
+      itemUrl: String(payload.itemWebUrl ?? (legacyItemId ? this.itemUrl(legacyItemId) : '') ?? ''),
+      purchaseHistoryUrl: this.purchaseHistoryUrl(legacyItemId ?? itemId),
+      condition: payload.condition ?? null,
+      sellerUsername: payload.seller?.username ?? null,
+      sellerFeedbackPercentage: Number.isFinite(feedback) ? feedback : null,
+      sellerFeedbackScore:
+        typeof payload.seller?.feedbackScore === 'number' ? payload.seller.feedbackScore : null,
+      topRatedSeller: Boolean(payload.topRatedBuyingExperience),
+      categoryId: payload.categoryId ? String(payload.categoryId) : null,
+      categoryPath: String(payload.categoryPath ?? '')
+        .split('|')
+        .map((part) => part.trim())
+        .filter(Boolean),
+      brand: payload.brand ?? null,
+      mpn: payload.mpn ?? null,
+      aspects: (payload.localizedAspects ?? [])
+        .map((aspect) => ({ name: String(aspect.name ?? ''), value: String(aspect.value ?? '') }))
+        .filter((aspect) => aspect.name && aspect.value),
+      descriptionHtml: payload.description ?? null,
+      shortDescription: payload.shortDescription ?? null,
+      soldCount: Math.max(0, Number(availability?.estimatedSoldQuantity ?? 0) || 0),
+      availableQuantity:
+        availability?.estimatedAvailableQuantity != null
+          ? Number(availability.estimatedAvailableQuantity)
+          : null,
+      shippingCost: shipping?.shippingCost?.value != null ? Number(shipping.shippingCost.value) : null,
+      shippingService: shipping?.shippingServiceCode ?? null,
+      itemLocation: [payload.itemLocation?.city, payload.itemLocation?.country]
+        .filter(Boolean)
+        .join(', ') || null,
+      returnsAccepted: payload.returnTerms?.returnsAccepted ?? null,
+      listingStartedAt: start?.toISOString() ?? null,
+      listingAgeDays: age,
+    };
+  }
+
+  /**
+   * eBay's required / recommended item specifics for a category. These drive
+   * search relevance on eBay UK, so the SEO panel reports them verbatim.
+   */
+  async categoryAspects(categoryId: string): Promise<EbayCategoryAspect[]> {
+    const token = await this.applicationToken();
+    const tree = this.categoryTreeId();
+    const payload = await this.request<{
+      aspects?: {
+        localizedAspectName?: string;
+        aspectConstraint?: {
+          aspectRequired?: boolean;
+          aspectUsage?: string;
+          aspectMode?: string;
+        };
+        aspectValues?: { localizedValue?: string }[];
+      }[];
+    }>(
+      'GET',
+      `${this.hosts().api}/commerce/taxonomy/v1/category_tree/${tree}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
+      token,
+    );
+
+    return (payload.aspects ?? [])
+      .map((aspect) => ({
+        name: String(aspect.localizedAspectName ?? ''),
+        required: Boolean(aspect.aspectConstraint?.aspectRequired),
+        usedForSearch: aspect.aspectConstraint?.aspectUsage === 'RECOMMENDED',
+        allowsFreeText: aspect.aspectConstraint?.aspectMode !== 'SELECTION_ONLY',
+        values: (aspect.aspectValues ?? [])
+          .map((value) => String(value.localizedValue ?? ''))
+          .filter(Boolean)
+          .slice(0, 25),
+      }))
+      .filter((aspect) => aspect.name);
+  }
+
+  async suggestCategory(query: string): Promise<{ categoryId: string; categoryName: string } | null> {
+    const token = await this.applicationToken();
     try {
-      const token = await this.applicationToken();
-      const payload = await this.request<BrowseItemPayload>(
+      const data = await this.request<{
+        categorySuggestions?: { category?: { categoryId?: string; categoryName?: string } }[];
+      }>(
         'GET',
-        `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`,
+        `${this.hosts().api}/commerce/taxonomy/v1/category_tree/${this.categoryTreeId()}/get_category_suggestions?q=${encodeURIComponent(query)}`,
         token,
       );
-      return this.mapBrowseSold(payload);
+      const suggestion = data.categorySuggestions?.[0]?.category;
+      if (!suggestion?.categoryId) return null;
+      return {
+        categoryId: String(suggestion.categoryId),
+        categoryName: String(suggestion.categoryName ?? suggestion.categoryId),
+      };
     } catch (error) {
       this.logger.warn(
-        `Browse getItem ${itemId}: ${error instanceof Error ? error.message : error}`,
+        `Category suggestion unavailable: ${error instanceof Error ? error.message : error}`,
       );
       return null;
     }
+  }
+
+  /**
+   * Phrases eBay's own search box suggests for a term — the closest public
+   * signal for what buyers actually type. Best effort: this is not part of the
+   * versioned REST APIs, so failures degrade to no suggestions.
+   */
+  async searchSuggestions(keyword: string): Promise<string[]> {
+    const trimmed = keyword.trim();
+    if (!trimmed) return [];
+    const params = new URLSearchParams({
+      kwd: trimmed,
+      sId: this.siteId(),
+      fmt: 'osr',
+      _jgo: 'json',
+    });
+    try {
+      const response = await fetch(`https://autosug.ebay.com/autosug?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!response.ok) return [];
+      const payload = (await response.json().catch(() => null)) as unknown;
+      return this.readSuggestionPayload(payload, trimmed);
+    } catch (error) {
+      this.logger.warn(
+        `eBay search suggestions unavailable: ${error instanceof Error ? error.message : error}`,
+      );
+      return [];
+    }
+  }
+
+  private readSuggestionPayload(payload: unknown, keyword: string): string[] {
+    // The OSR format is [term, [suggestion, ...]]; other shapes nest under res.sug.
+    const fromOsr = Array.isArray(payload) && Array.isArray(payload[1]) ? payload[1] : null;
+    const fromRes =
+      payload && typeof payload === 'object'
+        ? (payload as { res?: { sug?: unknown } }).res?.sug
+        : null;
+    const list = fromOsr ?? (Array.isArray(fromRes) ? fromRes : []);
+    return list
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim().toLowerCase())
+      .filter((item) => item && item !== keyword.toLowerCase())
+      .slice(0, 15);
+  }
+
+  private categoryTreeId(): string {
+    return this.config().marketplaceId === 'EBAY_GB' ? '3' : '0';
   }
 
   private async browseGetItems(
@@ -609,70 +876,28 @@ export class EbayRestClient {
   }
 
   async publishListing(accessToken: string, input: MarketplaceListingInput): Promise<MarketplacePublishResult> {
-    const ebay = this.config();
     const sku = this.sanitizeSku(input.sku);
     await this.ensureLocation(accessToken);
     const policies = await this.loadPolicies(accessToken);
-    const categoryId = await this.resolveCategoryId(accessToken, input.category ?? input.title);
+    const categoryId =
+      input.categoryId || (await this.resolveCategoryId(accessToken, input.category ?? input.title));
 
-    await this.request(
-      'PUT',
-      `${this.hosts().api}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
-      accessToken,
-      {
-        availability: { shipToLocationAvailability: { quantity: Math.max(input.quantity, 0) } },
-        condition: 'NEW',
-        product: {
-          title: input.title.slice(0, 80),
-          description: input.description || input.title,
-          imageUrls: input.images.filter((url) => url.startsWith('https://')).slice(0, 12),
-        },
-      },
-    );
+    await this.putInventoryItem(accessToken, sku, {
+      title: input.title,
+      description: input.description || input.title,
+      images: input.images,
+      quantity: input.quantity,
+      aspects: input.aspects,
+    });
 
-    const existing = await this.request<{ offers?: { offerId?: string }[] }>(
-      'GET',
-      `${this.hosts().api}/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}`,
-      accessToken,
-    ).catch(() => ({ offers: [] }));
-
-    let offerId = existing.offers?.[0]?.offerId;
-    const offerBody = {
+    const offerId = await this.upsertOffer(accessToken, {
       sku,
-      marketplaceId: ebay.marketplaceId,
-      format: 'FIXED_PRICE',
-      availableQuantity: Math.max(input.quantity, 0),
       categoryId,
-      listingDescription: input.description || input.title,
-      listingPolicies: {
-        fulfillmentPolicyId: policies.fulfillmentPolicyId,
-        paymentPolicyId: policies.paymentPolicyId,
-        returnPolicyId: policies.returnPolicyId,
-      },
-      merchantLocationKey: 'elbaflabs-default',
-      pricingSummary: { price: { currency: this.currency(), value: input.price.toFixed(2) } },
-    };
-
-    if (offerId) {
-      await this.request(
-        'PUT',
-        `${this.hosts().api}/sell/inventory/v1/offer/${offerId}`,
-        accessToken,
-        offerBody,
-      );
-    } else {
-      const created = await this.request<{ offerId?: string }>(
-        'POST',
-        `${this.hosts().api}/sell/inventory/v1/offer`,
-        accessToken,
-        offerBody,
-      );
-      offerId = created.offerId;
-    }
-
-    if (!offerId) {
-      throw new Error('eBay createOffer did not return an offerId.');
-    }
+      description: input.description || input.title,
+      price: input.price,
+      quantity: input.quantity,
+      policies,
+    });
 
     const published = await this.request<{ listingId?: string }>(
       'POST',
@@ -685,6 +910,202 @@ export class EbayRestClient {
     }
 
     return { listingId: published.listingId, offerId, sku };
+  }
+
+  /**
+   * Publishes one multi-variation listing: an inventory item per SKU, an
+   * inventory item group describing what varies, an offer per SKU, then a
+   * single group publish that returns the shared listing id.
+   */
+  async publishVariationListing(
+    accessToken: string,
+    input: MarketplaceVariationListingInput,
+  ): Promise<MarketplacePublishResult> {
+    if (input.variations.length === 0) {
+      throw new Error('A variation listing needs at least one variation.');
+    }
+    if (input.variesBy.length === 0) {
+      throw new Error('A variation listing needs at least one aspect that varies, such as Colour.');
+    }
+
+    const groupKey = this.sanitizeSku(input.groupKey);
+    await this.ensureLocation(accessToken);
+    const policies = await this.loadPolicies(accessToken);
+    const categoryId =
+      input.categoryId || (await this.resolveCategoryId(accessToken, input.category ?? input.title));
+    const groupImages = this.listingImages(input.images);
+    const description = input.description || input.title;
+
+    const variations = input.variations.map((variation) => ({
+      ...variation,
+      sku: this.sanitizeSku(variation.sku),
+    }));
+
+    for (const variation of variations) {
+      const aspects = [...(input.aspects ?? []), ...variation.aspects];
+      await this.putInventoryItem(accessToken, variation.sku, {
+        title: input.title,
+        description,
+        images: variation.imageUrl ? [variation.imageUrl, ...groupImages] : groupImages,
+        quantity: variation.quantity,
+        aspects,
+      });
+    }
+
+    // Only the aspects listed in variesBy may carry more than one value here.
+    const variesBySpecifications = input.variesBy.map((name) => ({
+      name,
+      values: [
+        ...new Set(
+          variations
+            .flatMap((variation) => variation.aspects)
+            .filter((aspect) => aspect.name === name)
+            .flatMap((aspect) => aspect.values),
+        ),
+      ],
+    }));
+
+    await this.request(
+      'PUT',
+      `${this.hosts().api}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`,
+      accessToken,
+      {
+        title: input.title.slice(0, 80),
+        description,
+        imageUrls: groupImages,
+        aspects: this.aspectsPayload(input.aspects),
+        variantSKUs: variations.map((variation) => variation.sku),
+        variesBy: { specifications: variesBySpecifications },
+      },
+    );
+
+    let firstOfferId: string | undefined;
+    for (const variation of variations) {
+      const offerId = await this.upsertOffer(accessToken, {
+        sku: variation.sku,
+        categoryId,
+        description,
+        price: variation.price,
+        quantity: variation.quantity,
+        policies,
+      });
+      firstOfferId ??= offerId;
+    }
+
+    const published = await this.request<{ listingId?: string }>(
+      'POST',
+      `${this.hosts().api}/sell/inventory/v1/offer/publish_by_inventory_item_group`,
+      accessToken,
+      { inventoryItemGroupKey: groupKey, marketplaceId: this.config().marketplaceId },
+    );
+
+    if (!published.listingId) {
+      throw new Error('eBay publishByInventoryItemGroup did not return a listingId.');
+    }
+
+    return {
+      listingId: published.listingId,
+      offerId: firstOfferId,
+      sku: variations[0].sku,
+      inventoryItemGroupKey: groupKey,
+    };
+  }
+
+  private async putInventoryItem(
+    accessToken: string,
+    sku: string,
+    item: {
+      title: string;
+      description: string;
+      images: string[];
+      quantity: number;
+      aspects?: MarketplaceListingAspect[];
+    },
+  ): Promise<void> {
+    await this.request(
+      'PUT',
+      `${this.hosts().api}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      accessToken,
+      {
+        availability: { shipToLocationAvailability: { quantity: Math.max(item.quantity, 0) } },
+        condition: 'NEW',
+        product: {
+          title: item.title.slice(0, 80),
+          description: item.description,
+          imageUrls: this.listingImages(item.images),
+          aspects: this.aspectsPayload(item.aspects),
+        },
+      },
+    );
+  }
+
+  private async upsertOffer(
+    accessToken: string,
+    offer: {
+      sku: string;
+      categoryId: string;
+      description: string;
+      price: number;
+      quantity: number;
+      policies: { fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string };
+    },
+  ): Promise<string> {
+    const existing = await this.request<{ offers?: { offerId?: string }[] }>(
+      'GET',
+      `${this.hosts().api}/sell/inventory/v1/offer?sku=${encodeURIComponent(offer.sku)}`,
+      accessToken,
+    ).catch(() => ({ offers: [] }));
+
+    const body = {
+      sku: offer.sku,
+      marketplaceId: this.config().marketplaceId,
+      format: 'FIXED_PRICE',
+      availableQuantity: Math.max(offer.quantity, 0),
+      categoryId: offer.categoryId,
+      listingDescription: offer.description,
+      listingPolicies: {
+        fulfillmentPolicyId: offer.policies.fulfillmentPolicyId,
+        paymentPolicyId: offer.policies.paymentPolicyId,
+        returnPolicyId: offer.policies.returnPolicyId,
+      },
+      merchantLocationKey: 'elbaflabs-default',
+      pricingSummary: { price: { currency: this.currency(), value: offer.price.toFixed(2) } },
+    };
+
+    const offerId = existing.offers?.[0]?.offerId;
+    if (offerId) {
+      await this.request('PUT', `${this.hosts().api}/sell/inventory/v1/offer/${offerId}`, accessToken, body);
+      return offerId;
+    }
+
+    const created = await this.request<{ offerId?: string }>(
+      'POST',
+      `${this.hosts().api}/sell/inventory/v1/offer`,
+      accessToken,
+      body,
+    );
+    if (!created.offerId) {
+      throw new Error('eBay createOffer did not return an offerId.');
+    }
+    return created.offerId;
+  }
+
+  /** eBay rejects non-HTTPS image URLs and accepts at most 12 per item. */
+  private listingImages(images: string[]): string[] {
+    return [...new Set(images.filter((url) => url.startsWith('https://')))].slice(0, 12);
+  }
+
+  private aspectsPayload(
+    aspects: MarketplaceListingAspect[] | undefined,
+  ): Record<string, string[]> | undefined {
+    if (!aspects?.length) return undefined;
+    const payload: Record<string, string[]> = {};
+    for (const aspect of aspects) {
+      const values = aspect.values.map((value) => value.trim()).filter(Boolean);
+      if (!aspect.name || values.length === 0) continue;
+      payload[aspect.name] = [...new Set([...(payload[aspect.name] ?? []), ...values])];
+    }
+    return Object.keys(payload).length > 0 ? payload : undefined;
   }
 
   async updatePriceQuantity(accessToken: string, sku: string, price: number, quantity: number): Promise<void> {

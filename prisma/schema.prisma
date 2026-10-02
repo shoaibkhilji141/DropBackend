@@ -347,6 +347,26 @@ model AIRequest {
   @@index([status])
 }
 
+/// Point-in-time sold/stock readings for a researched eBay listing.
+///
+/// eBay exposes no API for a listing's buyer-by-buyer purchase history, so the
+/// research page builds a real sales timeline by recording what the Browse API
+/// reports each time a listing is opened and reporting the deltas between
+/// readings.
+model EbaySalesSnapshot {
+  id           String   @id @default(cuid())
+  itemId       String
+  legacyItemId String?
+  title        String
+  price        Float
+  currency     String   @default("GBP")
+  soldCount    Int      @default(0)
+  available    Int?
+  capturedAt   DateTime @default(now())
+
+  @@index([itemId, capturedAt])
+}
+
 model Alert {
   id        String        @id @default(cuid())
   userId    String?

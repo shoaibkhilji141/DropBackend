@@ -88,6 +88,21 @@ export class ListingCopyResultDto {
   @ApiProperty({ type: ListingCopyProductDto }) product: ListingCopyProductDto;
 }
 
+export class ListingSeoAspectDto {
+  @ApiProperty() name: string;
+  @ApiProperty() value: string;
+}
+
+export class ListingSeoResultDto {
+  @ApiProperty({ description: 'eBay title of at most 80 characters' }) title: string;
+  @ApiProperty({ description: 'Listing description as HTML' }) descriptionHtml: string;
+  @ApiProperty({ type: [String] }) highlights: string[];
+  @ApiProperty({ type: [String] }) keywords: string[];
+  @ApiProperty({ type: [ListingSeoAspectDto] }) aspects: ListingSeoAspectDto[];
+  @ApiProperty() model: string;
+  @ApiProperty() tokensUsed: number;
+}
+
 export class AiListResultDto {
   @ApiProperty() requestId: string;
   @ApiProperty() type: string;

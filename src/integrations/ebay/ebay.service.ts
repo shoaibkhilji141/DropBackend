@@ -12,8 +12,10 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { IntegrationAccountsService } from '../accounts/integration-accounts.service';
 import {
   MarketplaceConnectionView,
+  MarketplaceListingAspect,
   MarketplaceOrder,
   MarketplaceOrderItem,
+  MarketplaceVariationListingInput,
   SellerListing,
 } from '../marketplace/marketplace.types';
 import { EbayMarketplaceItem, EbayResearchQuery, EbayRestClient } from './ebay-rest.client';
@@ -160,23 +162,43 @@ export class EbayService {
     };
   }
 
-  async publishListing(userId: string, listingId: string) {
+  async publishListing(
+    userId: string,
+    listingId: string,
+    extras?: { aspects?: MarketplaceListingAspect[] },
+  ) {
     const listing = await this.prisma.listing.findUnique({
       where: { id: listingId },
-      include: { product: true, store: true },
+      include: { product: { include: { variants: true } }, store: true },
     });
     if (!listing) throw new NotFoundException(`Listing ${listingId} not found`);
 
     const token = await this.accessToken(userId);
+    const images = parseStringArray(listing.images);
+    const description = listing.description || listing.title;
+    const selectedIds = parseStringArray(listing.selectedVariantIds);
+    const selectedVariants = (listing.product?.variants ?? []).filter(
+      (variant) => selectedIds.length === 0 || selectedIds.includes(variant.id),
+    );
+    const variationInput = this.variationInput(listing, selectedVariants, extras?.aspects);
+
     try {
-      const published = await this.client.publishListing(token, {
-        sku: listing.sku || listing.product?.externalId || listing.id,
-        title: listing.title,
-        description: listing.description || listing.title,
-        images: parseStringArray(listing.images),
-        price: listing.price,
-        quantity: listing.quantity,
-        category: listing.category ?? listing.product?.category,
+      const published = variationInput
+        ? await this.client.publishVariationListing(token, variationInput)
+        : await this.client.publishListing(token, {
+            sku: listing.sku || listing.product?.externalId || listing.id,
+            title: listing.title,
+            description,
+            images,
+            price: listing.price,
+            quantity: listing.quantity,
+            category: listing.category ?? listing.product?.category,
+            aspects: extras?.aspects,
+          });
+
+      await this.prisma.product.update({
+        where: { id: listing.productId },
+        data: { status: 'LISTED' },
       });
 
       return this.prisma.listing.update({
@@ -485,6 +507,76 @@ export class EbayService {
     };
   }
 
+  private variationInput(
+    listing: {
+      id: string;
+      title: string;
+      description: string | null;
+      images: string | null;
+      category: string | null;
+      price: number;
+      product: {
+        category: string | null;
+        variants: Array<{
+          id: string;
+          externalId: string | null;
+          sku: string | null;
+          name: string;
+          attributes: string | null;
+          imageUrl: string | null;
+          sellPrice: number;
+          stock: number;
+        }>;
+      } | null;
+    },
+    variants: Array<{
+      id: string;
+      externalId: string | null;
+      sku: string | null;
+      name: string;
+      attributes: string | null;
+      imageUrl: string | null;
+      sellPrice: number;
+      stock: number;
+    }>,
+    sharedAspects?: MarketplaceListingAspect[],
+  ): MarketplaceVariationListingInput | null {
+    if (variants.length < 2) return null;
+    const parsed = variants.map((variant) => ({
+      variant,
+      aspects: parseVariantAspects(variant.attributes, variant.name),
+    }));
+    const nameCounts = new Map<string, Set<string>>();
+    for (const row of parsed) {
+      for (const aspect of row.aspects) {
+        const values = nameCounts.get(aspect.name) ?? new Set<string>();
+        aspect.values.forEach((value) => values.add(value));
+        nameCounts.set(aspect.name, values);
+      }
+    }
+    const variesBy = [...nameCounts.entries()]
+      .filter(([, values]) => values.size > 1)
+      .map(([name]) => name);
+    if (variesBy.length === 0) return null;
+
+    return {
+      groupKey: listing.id,
+      title: listing.title,
+      description: listing.description || listing.title,
+      images: parseStringArray(listing.images),
+      category: listing.category ?? listing.product?.category,
+      aspects: sharedAspects,
+      variesBy,
+      variations: parsed.map((row) => ({
+        sku: row.variant.sku || row.variant.externalId || row.variant.id,
+        aspects: row.aspects,
+        price: row.variant.sellPrice || listing.price,
+        quantity: Math.max(row.variant.stock, 0),
+        imageUrl: row.variant.imageUrl,
+      })),
+    };
+  }
+
   /** Removes the local seed catalog once a real eBay sync has succeeded. */
   private async purgeDemoCatalog(): Promise<void> {
     await this.prisma.order.deleteMany({ where: { externalId: { startsWith: 'EB-' } } });
@@ -505,4 +597,31 @@ export class EbayService {
     }
     return { status: 'PAID', fulfillment: 'PROCESSING' };
   }
+}
+
+function parseVariantAspects(
+  attributes: string | null | undefined,
+  fallbackName: string,
+): MarketplaceListingAspect[] {
+  const pairs: MarketplaceListingAspect[] = [];
+  if (attributes?.trim()) {
+    for (const part of attributes.split(/[;|]/)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const hash = trimmed.match(/#(.+)$/);
+      const colon = trimmed.indexOf(':');
+      if (hash && colon > 0) {
+        pairs.push({ name: trimmed.slice(0, colon).trim() || 'Option', values: [hash[1].trim()] });
+      } else if (colon > 0) {
+        pairs.push({
+          name: trimmed.slice(0, colon).trim(),
+          values: [trimmed.slice(colon + 1).trim()],
+        });
+      }
+    }
+  }
+  if (pairs.length === 0 && fallbackName) {
+    return [{ name: 'Variation', values: [fallbackName] }];
+  }
+  return pairs.filter((aspect) => aspect.name && aspect.values[0]);
 }

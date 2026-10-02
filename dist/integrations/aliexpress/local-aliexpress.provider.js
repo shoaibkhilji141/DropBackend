@@ -20,7 +20,10 @@ let LocalAliExpressProvider = class LocalAliExpressProvider {
         const matches = local_catalog_1.LOCAL_SUPPLIER_CATALOG.filter((product) => {
             if (term) {
                 const haystack = `${product.title} ${product.category} ${product.description}`.toLowerCase();
-                if (!haystack.includes(term))
+                const words = term.split(/\s+/).filter((word) => word.length > 2);
+                const hit = haystack.includes(term) ||
+                    (words.length > 0 && words.filter((word) => haystack.includes(word)).length >= Math.min(2, words.length));
+                if (!hit)
                     return false;
             }
             if (query.category && product.category !== query.category)

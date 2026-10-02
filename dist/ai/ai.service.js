@@ -127,6 +127,68 @@ let AiService = class AiService {
             product: this.copyProduct(product, suggested),
         };
     }
+    async generateListingSeo(input) {
+        const dto = {
+            productTitle: input.sourceTitle,
+            description: input.description?.slice(0, 3500) || undefined,
+            category: input.categoryName || undefined,
+            keywords: input.minedKeywords.slice(0, 20),
+            tone: 'Sales',
+        };
+        const result = await this.runText(client_1.AIRequestType.TITLE, dto, {
+            system: `${SELLER_VOICE} You are optimising a listing for eBay UK (ebay.co.uk), so use British English spelling (colour, metre, aluminium) and GBP. Return JSON {"title":"...","descriptionHtml":"...","highlights":["..."],"keywords":["..."],"aspects":[{"name":"...","value":"..."}]}.
+title: at most 80 characters and it must use as much of that budget as possible without stuffing. Lead with the exact phrase buyers search for, then the product type, then the one or two strongest differentiators (size, colour, quantity, compatibility). No ALL CAPS, no punctuation runs, no seller slogans, no quote characters.
+descriptionHtml: valid simple HTML using only <p>, <h3>, <ul>, <li> and <strong>. Open with two sentences on the buyer outcome, then a <ul> of specific features, then a short dispatch and returns paragraph that promises no specific delivery date. Repeat the main keyword naturally two or three times. No inline styles, no scripts, no tables, no images.
+highlights: 4 to 6 lines under 90 characters each.
+keywords: 10 to 14 search phrases ordered by commercial value.
+aspects: item specifics. Use every requested aspect name you can fill from the source data, keeping the requested name spelling exactly. Omit an aspect entirely rather than guessing a value.
+Never invent brands, certifications, warranties or measurements that are absent from the source.`,
+            user: [
+                'Write an SEO-optimised eBay UK listing for this product.',
+                `Source title: ${input.sourceTitle}`,
+                input.categoryName ? `eBay category: ${input.categoryName}` : '',
+                input.priceHint ? `Selling price: ${input.priceHint} ${input.currency ?? 'GBP'}` : '',
+                input.minedKeywords.length
+                    ? `Keywords mined from the best selling competing listings, strongest first:\n${input.minedKeywords.slice(0, 20).join('\n')}`
+                    : '',
+                input.buyerSearches.length
+                    ? `Phrases eBay's search box suggests for this product:\n${input.buyerSearches.slice(0, 15).join('\n')}`
+                    : '',
+                input.knownAspects.length
+                    ? `Known item specifics from the source listing:\n${input.knownAspects
+                        .map((aspect) => `${aspect.name}: ${aspect.value}`)
+                        .join('\n')}`
+                    : '',
+                input.requestedAspectNames.length
+                    ? `Item specific names eBay asks for in this category: ${input.requestedAspectNames.slice(0, 30).join(', ')}`
+                    : '',
+                input.description ? `Source description:\n${input.description.slice(0, 3000)}` : '',
+            ]
+                .filter(Boolean)
+                .join('\n'),
+            extract: (payload) => JSON.stringify(payload),
+        });
+        const payload = this.openai.parseJsonObject(result.content);
+        return {
+            title: this.openai.requireString(payload, 'title').replace(/\s+/g, ' ').trim().slice(0, 80),
+            descriptionHtml: this.openai.requireString(payload, 'descriptionHtml'),
+            highlights: this.stringList(payload, 'highlights').slice(0, 8),
+            keywords: this.stringList(payload, 'keywords').slice(0, 16),
+            aspects: this.aspectList(payload),
+            model: result.model,
+            tokensUsed: result.tokensUsed,
+        };
+    }
+    aspectList(payload) {
+        const value = payload.aspects;
+        if (!Array.isArray(value))
+            return [];
+        return value
+            .filter((item) => Boolean(item) && typeof item === 'object')
+            .map((item) => ({ name: String(item.name ?? '').trim(), value: String(item.value ?? '').trim() }))
+            .filter((item) => item.name && item.value)
+            .slice(0, 30);
+    }
     generateHighlights(dto) {
         return this.runList(client_1.AIRequestType.HIGHLIGHTS, dto, {
             system: `${SELLER_VOICE} Return JSON {"highlights":["..."]}. Provide 4 to 6 short product highlights, each under 90 characters.`,

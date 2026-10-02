@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Listing, ListingStatus, Prisma } from '@prisma/client';
 import { liveListingWhere } from '../common/demo-data';
-import { htmlToPlainText } from '../common/html';
+import { htmlToPlainText, sanitizeListingHtml } from '../common/html';
 import { parseStringArray, stringifyStringArray } from '../common/json';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EbayService } from '../integrations/ebay/ebay.service';
@@ -40,6 +40,43 @@ export class ListingsService {
 
   async findOne(id: string): Promise<ListingView> {
     return this.toView(await this.findRecord(id));
+  }
+
+  async createForEbay(input: {
+    productId: string;
+    title: string;
+    descriptionHtml: string;
+    images: string[];
+    category?: string | null;
+    sku?: string | null;
+    price: number;
+    quantity: number;
+    shippingMethod?: string | null;
+    shippingCost?: number;
+    shippingEtaDays?: number | null;
+    selectedVariantIds: string[];
+  }): Promise<ListingView> {
+    const store = await this.prisma.store.findFirst({ orderBy: { createdAt: 'asc' } });
+    const listing = await this.prisma.listing.create({
+      data: {
+        productId: input.productId,
+        storeId: store?.id ?? null,
+        title: input.title.slice(0, 80),
+        description: sanitizeListingHtml(input.descriptionHtml) || input.title,
+        images: stringifyStringArray(input.images) ?? '[]',
+        category: input.category ?? null,
+        sku: input.sku ?? null,
+        price: input.price,
+        quantity: input.quantity,
+        shippingMethod: input.shippingMethod ?? null,
+        shippingCost: input.shippingCost ?? 0,
+        shippingEtaDays: input.shippingEtaDays ?? null,
+        selectedVariantIds: stringifyStringArray(input.selectedVariantIds),
+        status: ListingStatus.READY,
+      },
+      include: LISTING_INCLUDE,
+    });
+    return this.toView(listing);
   }
 
   async create(dto: CreateListingDto): Promise<ListingView> {

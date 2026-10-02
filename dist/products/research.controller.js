@@ -16,18 +16,19 @@ exports.ResearchController = void 0;
 const openapi = require("@nestjs/swagger");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
-const ebay_service_1 = require("../integrations/ebay/ebay.service");
+const current_user_decorator_1 = require("../auth/current-user.decorator");
 const product_dto_1 = require("./dto/product.dto");
 const products_service_1 = require("./products.service");
+const research_insights_service_1 = require("./research-insights.service");
 let ResearchController = class ResearchController {
     productsService;
-    ebay;
-    constructor(productsService, ebay) {
+    insights;
+    constructor(productsService, insights) {
         this.productsService = productsService;
-        this.ebay = ebay;
+        this.insights = insights;
     }
     searchEbay(query) {
-        return this.ebay.searchMarketplace({
+        return this.insights.searchMarketplaceCached({
             q: query.q,
             categoryId: query.categoryId,
             minPrice: query.minPrice,
@@ -36,6 +37,15 @@ let ResearchController = class ResearchController {
             sort: query.sort,
             limit: query.limit,
         });
+    }
+    getEbayInsight(itemId) {
+        return this.insights.getInsight(itemId);
+    }
+    matchAliExpress(query) {
+        return this.insights.matchAliExpress(query);
+    }
+    listOnEbay(externalId, dto, user) {
+        return this.insights.listOnEbay(externalId, dto, user);
     }
     search(query) {
         return this.productsService.searchSupplier(query);
@@ -63,6 +73,35 @@ __decorate([
     __metadata("design:paramtypes", [product_dto_1.SearchEbayResearchDto]),
     __metadata("design:returntype", void 0)
 ], ResearchController.prototype, "searchEbay", null);
+__decorate([
+    (0, common_1.Get)('ebay/insight'),
+    (0, swagger_1.ApiOperation)({ summary: 'Sales, keywords and SEO insight for one eBay UK listing' }),
+    openapi.ApiResponse({ status: 200, type: Object }),
+    __param(0, (0, common_1.Query)('itemId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], ResearchController.prototype, "getEbayInsight", null);
+__decorate([
+    (0, common_1.Get)('aliexpress/match'),
+    (0, swagger_1.ApiOperation)({ summary: 'Find AliExpress products that match an eBay listing by text or image' }),
+    openapi.ApiResponse({ status: 200, type: Object }),
+    __param(0, (0, common_1.Query)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [product_dto_1.MatchAliExpressQueryDto]),
+    __metadata("design:returntype", Promise)
+], ResearchController.prototype, "matchAliExpress", null);
+__decorate([
+    (0, common_1.Post)('aliexpress/:externalId/list-on-ebay'),
+    (0, swagger_1.ApiOperation)({ summary: 'Import an AliExpress product and list it on the connected eBay UK account' }),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Param)('externalId')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, product_dto_1.ListOnEbayDto, Object]),
+    __metadata("design:returntype", void 0)
+], ResearchController.prototype, "listOnEbay", null);
 __decorate([
     (0, common_1.Get)('products'),
     (0, swagger_1.ApiOperation)({
@@ -113,6 +152,6 @@ exports.ResearchController = ResearchController = __decorate([
     (0, swagger_1.ApiTags)('product-research'),
     (0, common_1.Controller)('research'),
     __metadata("design:paramtypes", [products_service_1.ProductsService,
-        ebay_service_1.EbayService])
+        research_insights_service_1.ResearchInsightsService])
 ], ResearchController);
 //# sourceMappingURL=research.controller.js.map

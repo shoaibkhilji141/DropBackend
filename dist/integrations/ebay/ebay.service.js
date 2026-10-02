@@ -144,23 +144,35 @@ let EbayService = EbayService_1 = class EbayService {
             marketplace: this.configService.get('ebay')?.marketplaceId ?? 'EBAY_GB',
         };
     }
-    async publishListing(userId, listingId) {
+    async publishListing(userId, listingId, extras) {
         const listing = await this.prisma.listing.findUnique({
             where: { id: listingId },
-            include: { product: true, store: true },
+            include: { product: { include: { variants: true } }, store: true },
         });
         if (!listing)
             throw new common_1.NotFoundException(`Listing ${listingId} not found`);
         const token = await this.accessToken(userId);
+        const images = (0, json_1.parseStringArray)(listing.images);
+        const description = listing.description || listing.title;
+        const selectedIds = (0, json_1.parseStringArray)(listing.selectedVariantIds);
+        const selectedVariants = (listing.product?.variants ?? []).filter((variant) => selectedIds.length === 0 || selectedIds.includes(variant.id));
+        const variationInput = this.variationInput(listing, selectedVariants, extras?.aspects);
         try {
-            const published = await this.client.publishListing(token, {
-                sku: listing.sku || listing.product?.externalId || listing.id,
-                title: listing.title,
-                description: listing.description || listing.title,
-                images: (0, json_1.parseStringArray)(listing.images),
-                price: listing.price,
-                quantity: listing.quantity,
-                category: listing.category ?? listing.product?.category,
+            const published = variationInput
+                ? await this.client.publishVariationListing(token, variationInput)
+                : await this.client.publishListing(token, {
+                    sku: listing.sku || listing.product?.externalId || listing.id,
+                    title: listing.title,
+                    description,
+                    images,
+                    price: listing.price,
+                    quantity: listing.quantity,
+                    category: listing.category ?? listing.product?.category,
+                    aspects: extras?.aspects,
+                });
+            await this.prisma.product.update({
+                where: { id: listing.productId },
+                data: { status: 'LISTED' },
             });
             return this.prisma.listing.update({
                 where: { id: listing.id },
@@ -446,6 +458,43 @@ let EbayService = EbayService_1 = class EbayService {
             productId: listing?.productId,
         };
     }
+    variationInput(listing, variants, sharedAspects) {
+        if (variants.length < 2)
+            return null;
+        const parsed = variants.map((variant) => ({
+            variant,
+            aspects: parseVariantAspects(variant.attributes, variant.name),
+        }));
+        const nameCounts = new Map();
+        for (const row of parsed) {
+            for (const aspect of row.aspects) {
+                const values = nameCounts.get(aspect.name) ?? new Set();
+                aspect.values.forEach((value) => values.add(value));
+                nameCounts.set(aspect.name, values);
+            }
+        }
+        const variesBy = [...nameCounts.entries()]
+            .filter(([, values]) => values.size > 1)
+            .map(([name]) => name);
+        if (variesBy.length === 0)
+            return null;
+        return {
+            groupKey: listing.id,
+            title: listing.title,
+            description: listing.description || listing.title,
+            images: (0, json_1.parseStringArray)(listing.images),
+            category: listing.category ?? listing.product?.category,
+            aspects: sharedAspects,
+            variesBy,
+            variations: parsed.map((row) => ({
+                sku: row.variant.sku || row.variant.externalId || row.variant.id,
+                aspects: row.aspects,
+                price: row.variant.sellPrice || listing.price,
+                quantity: Math.max(row.variant.stock, 0),
+                imageUrl: row.variant.imageUrl,
+            })),
+        };
+    }
     async purgeDemoCatalog() {
         await this.prisma.order.deleteMany({ where: { externalId: { startsWith: 'EB-' } } });
         await this.prisma.listing.deleteMany({ where: { externalId: { startsWith: 'ebay-' } } });
@@ -470,4 +519,29 @@ exports.EbayService = EbayService = EbayService_1 = __decorate([
         integration_accounts_service_1.IntegrationAccountsService,
         ebay_rest_client_1.EbayRestClient])
 ], EbayService);
+function parseVariantAspects(attributes, fallbackName) {
+    const pairs = [];
+    if (attributes?.trim()) {
+        for (const part of attributes.split(/[;|]/)) {
+            const trimmed = part.trim();
+            if (!trimmed)
+                continue;
+            const hash = trimmed.match(/#(.+)$/);
+            const colon = trimmed.indexOf(':');
+            if (hash && colon > 0) {
+                pairs.push({ name: trimmed.slice(0, colon).trim() || 'Option', values: [hash[1].trim()] });
+            }
+            else if (colon > 0) {
+                pairs.push({
+                    name: trimmed.slice(0, colon).trim(),
+                    values: [trimmed.slice(colon + 1).trim()],
+                });
+            }
+        }
+    }
+    if (pairs.length === 0 && fallbackName) {
+        return [{ name: 'Variation', values: [fallbackName] }];
+    }
+    return pairs.filter((aspect) => aspect.name && aspect.values[0]);
+}
 //# sourceMappingURL=ebay.service.js.map

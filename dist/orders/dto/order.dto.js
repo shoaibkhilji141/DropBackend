@@ -21,7 +21,7 @@ class ListOrdersQueryDto {
     search;
     channel;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, search: { required: false, type: () => String }, channel: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, search: { required: false, type: () => String }, channel: { required: false, type: () => String } };
     }
 }
 exports.ListOrdersQueryDto = ListOrdersQueryDto;
@@ -59,7 +59,7 @@ class CreateAliExpressPurchaseDto {
     status;
     totalAmount;
     static _OPENAPI_METADATA_FACTORY() {
-        return { title: { required: true, type: () => String }, shopName: { required: false, type: () => String }, externalId: { required: false, type: () => String }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, placedAt: { required: false, type: () => String }, status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, totalAmount: { required: false, type: () => Number, minimum: 0 } };
+        return { title: { required: true, type: () => String }, shopName: { required: false, type: () => String }, externalId: { required: false, type: () => String }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, placedAt: { required: false, type: () => String }, status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, totalAmount: { required: false, type: () => Number, minimum: 0 } };
     }
 }
 exports.CreateAliExpressPurchaseDto = CreateAliExpressPurchaseDto;
@@ -123,7 +123,7 @@ class UpdateOrderDto {
     buyerCity;
     buyerCountry;
     static _OPENAPI_METADATA_FACTORY() {
-        return { status: { required: false, enum: ["PENDING", "PAID", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, buyerName: { required: false, type: () => String }, buyerEmail: { required: false, type: () => String }, buyerAddress: { required: false, type: () => String }, buyerCity: { required: false, type: () => String }, buyerCountry: { required: false, type: () => String } };
+        return { status: { required: false, enum: ["PAID", "PENDING", "FULFILLED", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] }, fulfillmentStatus: { required: false, enum: ["SHIPPED", "DELIVERED", "UNFULFILLED", "PROCESSING"] }, trackingCode: { required: false, type: () => String }, trackingCarrier: { required: false, type: () => String }, buyerName: { required: false, type: () => String }, buyerEmail: { required: false, type: () => String }, buyerAddress: { required: false, type: () => String }, buyerCity: { required: false, type: () => String }, buyerCountry: { required: false, type: () => String } };
     }
 }
 exports.UpdateOrderDto = UpdateOrderDto;

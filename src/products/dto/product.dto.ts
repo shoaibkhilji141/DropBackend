@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { ProductStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsIn,
@@ -10,6 +11,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { SupplierSortOption } from '../../integrations/aliexpress/aliexpress.types';
@@ -190,6 +192,102 @@ export class UpdateProductDto {
   @IsOptional()
   @IsEnum(ProductStatus)
   status?: ProductStatus;
+}
+
+export class EbayItemInsightQueryDto {
+  @ApiPropertyOptional({ description: 'eBay item id (v1|…|0 or legacy numeric id)' })
+  @IsOptional()
+  @IsString()
+  itemId?: string;
+}
+
+export class MatchAliExpressQueryDto {
+  @ApiPropertyOptional({ description: 'Text query copied from the eBay listing' })
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  @ApiPropertyOptional({ description: 'eBay listing image URL used for visual match' })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 40 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(40)
+  pageSize?: number;
+}
+
+export class ListingAspectDto {
+  @IsString()
+  name: string;
+
+  @IsString()
+  value: string;
+}
+
+export class ListOnEbayDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  title?: string;
+
+  @ApiPropertyOptional({ description: 'eBay listing description as HTML' })
+  @IsOptional()
+  @IsString()
+  descriptionHtml?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  images?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  price?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  quantity?: number;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  variantExternalIds?: string[];
+
+  @ApiPropertyOptional({ type: [ListingAspectDto] })
+  @IsOptional()
+  @IsArray()
+  aspects?: ListingAspectDto[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  category?: string;
+
+  @ApiPropertyOptional({ description: 'Publish to ebay.co.uk after creating the draft' })
+  @IsOptional()
+  @IsBoolean()
+  publish?: boolean;
 }
 
 export class SearchEbayResearchDto {

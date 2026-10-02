@@ -48,6 +48,29 @@ let ListingsService = class ListingsService {
     async findOne(id) {
         return this.toView(await this.findRecord(id));
     }
+    async createForEbay(input) {
+        const store = await this.prisma.store.findFirst({ orderBy: { createdAt: 'asc' } });
+        const listing = await this.prisma.listing.create({
+            data: {
+                productId: input.productId,
+                storeId: store?.id ?? null,
+                title: input.title.slice(0, 80),
+                description: (0, html_1.sanitizeListingHtml)(input.descriptionHtml) || input.title,
+                images: (0, json_1.stringifyStringArray)(input.images) ?? '[]',
+                category: input.category ?? null,
+                sku: input.sku ?? null,
+                price: input.price,
+                quantity: input.quantity,
+                shippingMethod: input.shippingMethod ?? null,
+                shippingCost: input.shippingCost ?? 0,
+                shippingEtaDays: input.shippingEtaDays ?? null,
+                selectedVariantIds: (0, json_1.stringifyStringArray)(input.selectedVariantIds),
+                status: client_1.ListingStatus.READY,
+            },
+            include: LISTING_INCLUDE,
+        });
+        return this.toView(listing);
+    }
     async create(dto) {
         const product = await this.prisma.product.findUnique({
             where: { id: dto.productId },

@@ -19,12 +19,49 @@ export interface MarketplaceListingInput {
   price: number;
   quantity: number;
   category?: string | null;
+  categoryId?: string | null;
+  /** Item specifics. eBay uses these for search relevance, so they matter. */
+  aspects?: MarketplaceListingAspect[];
+}
+
+export interface MarketplaceListingAspect {
+  name: string;
+  values: string[];
+}
+
+export interface MarketplaceVariation {
+  sku: string;
+  /** Aspect values that make this variation unique, e.g. Colour: Red, Size: L. */
+  aspects: MarketplaceListingAspect[];
+  price: number;
+  quantity: number;
+  imageUrl?: string | null;
+}
+
+/**
+ * A single eBay listing that buyers pick a variation from. eBay models this as
+ * one inventory item per SKU plus an inventory item group that ties them
+ * together, so the publish step needs all SKUs up front.
+ */
+export interface MarketplaceVariationListingInput {
+  groupKey: string;
+  title: string;
+  description: string;
+  images: string[];
+  category?: string | null;
+  categoryId?: string | null;
+  /** Aspects shared by every variation, e.g. Brand or Material. */
+  aspects?: MarketplaceListingAspect[];
+  /** Aspect names buyers choose between, in the order they should appear. */
+  variesBy: string[];
+  variations: MarketplaceVariation[];
 }
 
 export interface MarketplacePublishResult {
   listingId: string;
   offerId?: string;
   sku: string;
+  inventoryItemGroupKey?: string;
 }
 
 export interface MarketplaceOrderItem {

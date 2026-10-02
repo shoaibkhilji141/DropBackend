@@ -52,6 +52,8 @@ export type SupplierSortOption =
 
 export interface SupplierSearchQuery {
   search?: string;
+  /** eBay / supplier image URL used for visual match when the live API supports it. */
+  imageUrl?: string;
   category?: string;
   supplier?: string;
   minCostPrice?: number;

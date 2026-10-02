@@ -271,6 +271,13 @@ export class AliExpressApiClient {
   async search(accessToken: string, query: SupplierSearchQuery): Promise<SupplierSearchResult> {
     const keyword = query.search?.trim();
     const sortByOrders = !query.sort || query.sort === 'ordersDesc';
+    if (query.imageUrl) {
+      const visual = await this.searchByImage(accessToken, query.imageUrl, keyword);
+      if (visual.length > 0) {
+        if (sortByOrders) visual.sort((a, b) => b.orders - a.orders);
+        return { items: visual, facets: { categories: [], suppliers: [] } };
+      }
+    }
     if (!keyword) {
       const recommended = await this.recommend(accessToken);
       if (recommended.length > 0 && recommended.some((item) => item.orders > 0)) {
@@ -321,6 +328,41 @@ export class AliExpressApiClient {
       lastError ||
         'AliExpress product search returned no products. Confirm Dropshipping API access for aliexpress.ds.text.search.',
     );
+  }
+
+  private async searchByImage(
+    accessToken: string,
+    imageUrl: string,
+    keyword?: string,
+  ): Promise<SupplierProduct[]> {
+    const attempts: Record<string, string | number | boolean | undefined>[] = [
+      {
+        image_address: imageUrl,
+        currency: 'GBP',
+        lang: 'en',
+        ship_to: 'GB',
+        page_index: 1,
+        page_size: 20,
+      },
+      {
+        image_url: imageUrl,
+        target_currency: 'GBP',
+        target_language: 'EN',
+        ship_to_country: 'GB',
+        page_index: 1,
+        page_size: 20,
+      },
+    ];
+    if (keyword) attempts[0].keyWord = keyword;
+
+    for (const business of attempts) {
+      const result = await this.call('aliexpress.ds.image.search', accessToken, business);
+      const items = this.extractList(result.payload)
+        .map((row) => this.mapSearchRow(row))
+        .filter((item): item is SupplierProduct => item !== null);
+      if (items.length > 0) return items;
+    }
+    return [];
   }
 
   async getProduct(accessToken: string, externalId: string): Promise<SupplierProduct | null> {

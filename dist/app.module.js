@@ -12,6 +12,7 @@ const core_1 = require("@nestjs/core");
 const nestjs_pino_1 = require("nestjs-pino");
 const auth_module_1 = require("./auth/auth.module");
 const jwt_auth_guard_1 = require("./auth/jwt-auth.guard");
+const cache_module_1 = require("./common/cache/cache.module");
 const all_exceptions_filter_1 = require("./common/filters/all-exceptions.filter");
 const health_controller_1 = require("./common/health.controller");
 const prisma_module_1 = require("./common/prisma/prisma.module");
@@ -45,6 +46,7 @@ exports.AppModule = AppModule = __decorate([
                 },
             }),
             prisma_module_1.PrismaModule,
+            cache_module_1.CacheModule,
             redis_module_1.RedisModule,
             jobs_module_1.JobsModule.register(),
             auth_module_1.AuthModule,

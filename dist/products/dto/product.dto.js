@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SearchEbayResearchDto = exports.UpdateProductDto = exports.ListProductsQueryDto = exports.SearchSupplierProductsDto = exports.DERIVED_SORTS = void 0;
+exports.SearchEbayResearchDto = exports.ListOnEbayDto = exports.ListingAspectDto = exports.MatchAliExpressQueryDto = exports.EbayItemInsightQueryDto = exports.UpdateProductDto = exports.ListProductsQueryDto = exports.SearchSupplierProductsDto = exports.DERIVED_SORTS = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const client_1 = require("@prisma/client");
@@ -41,7 +41,7 @@ class SearchSupplierProductsDto {
     page;
     pageSize;
     static _OPENAPI_METADATA_FACTORY() {
-        return { search: { required: false, type: () => String }, category: { required: false, type: () => String }, supplier: { required: false, type: () => String }, minCostPrice: { required: false, type: () => Number, minimum: 0 }, maxCostPrice: { required: false, type: () => Number, minimum: 0 }, minSellPrice: { required: false, type: () => Number, minimum: 0 }, maxSellPrice: { required: false, type: () => Number, minimum: 0 }, minProfit: { required: false, type: () => Number }, minMargin: { required: false, type: () => Number }, minRating: { required: false, type: () => Number, minimum: 0, maximum: 5 }, minOrders: { required: false, type: () => Number, minimum: 0 }, inStockOnly: { required: false, type: () => Boolean }, sort: { required: false, enum: ["profitDesc", "marginDesc", "sellPriceAsc", "sellPriceDesc", "relevance", "costAsc", "costDesc", "ratingDesc", "ordersDesc"], enum: [...SUPPLIER_SORTS, ...exports.DERIVED_SORTS] }, page: { required: false, type: () => Number, minimum: 1 }, pageSize: { required: false, type: () => Number, minimum: 1, maximum: 60 } };
+        return { search: { required: false, type: () => String }, category: { required: false, type: () => String }, supplier: { required: false, type: () => String }, minCostPrice: { required: false, type: () => Number, minimum: 0 }, maxCostPrice: { required: false, type: () => Number, minimum: 0 }, minSellPrice: { required: false, type: () => Number, minimum: 0 }, maxSellPrice: { required: false, type: () => Number, minimum: 0 }, minProfit: { required: false, type: () => Number }, minMargin: { required: false, type: () => Number }, minRating: { required: false, type: () => Number, minimum: 0, maximum: 5 }, minOrders: { required: false, type: () => Number, minimum: 0 }, inStockOnly: { required: false, type: () => Boolean }, sort: { required: false, enum: ["relevance", "costAsc", "costDesc", "ratingDesc", "ordersDesc", "profitDesc", "marginDesc", "sellPriceAsc", "sellPriceDesc"], enum: [...SUPPLIER_SORTS, ...exports.DERIVED_SORTS] }, page: { required: false, type: () => Number, minimum: 1 }, pageSize: { required: false, type: () => Number, minimum: 1, maximum: 60 } };
     }
 }
 exports.SearchSupplierProductsDto = SearchSupplierProductsDto;
@@ -249,6 +249,150 @@ __decorate([
     (0, class_validator_1.IsEnum)(client_1.ProductStatus),
     __metadata("design:type", String)
 ], UpdateProductDto.prototype, "status", void 0);
+class EbayItemInsightQueryDto {
+    itemId;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { itemId: { required: false, type: () => String } };
+    }
+}
+exports.EbayItemInsightQueryDto = EbayItemInsightQueryDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'eBay item id (v1|…|0 or legacy numeric id)' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], EbayItemInsightQueryDto.prototype, "itemId", void 0);
+class MatchAliExpressQueryDto {
+    q;
+    imageUrl;
+    page;
+    pageSize;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { q: { required: false, type: () => String }, imageUrl: { required: false, type: () => String }, page: { required: false, type: () => Number, minimum: 1 }, pageSize: { required: false, type: () => Number, minimum: 1, maximum: 40 } };
+    }
+}
+exports.MatchAliExpressQueryDto = MatchAliExpressQueryDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Text query copied from the eBay listing' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], MatchAliExpressQueryDto.prototype, "q", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'eBay listing image URL used for visual match' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], MatchAliExpressQueryDto.prototype, "imageUrl", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ default: 1, minimum: 1 }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    __metadata("design:type", Number)
+], MatchAliExpressQueryDto.prototype, "page", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ default: 20, minimum: 1, maximum: 40 }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(40),
+    __metadata("design:type", Number)
+], MatchAliExpressQueryDto.prototype, "pageSize", void 0);
+class ListingAspectDto {
+    name;
+    value;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { name: { required: true, type: () => String }, value: { required: true, type: () => String } };
+    }
+}
+exports.ListingAspectDto = ListingAspectDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], ListingAspectDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], ListingAspectDto.prototype, "value", void 0);
+class ListOnEbayDto {
+    title;
+    descriptionHtml;
+    images;
+    price;
+    quantity;
+    variantExternalIds;
+    aspects;
+    category;
+    publish;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { title: { required: false, type: () => String, maxLength: 80 }, descriptionHtml: { required: false, type: () => String }, images: { required: false, type: () => [String] }, price: { required: false, type: () => Number, minimum: 0 }, quantity: { required: false, type: () => Number, minimum: 1 }, variantExternalIds: { required: false, type: () => [String] }, aspects: { required: false, type: () => [require("./product.dto").ListingAspectDto] }, category: { required: false, type: () => String }, publish: { required: false, type: () => Boolean } };
+    }
+}
+exports.ListOnEbayDto = ListOnEbayDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(80),
+    __metadata("design:type", String)
+], ListOnEbayDto.prototype, "title", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'eBay listing description as HTML' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], ListOnEbayDto.prototype, "descriptionHtml", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: [String] }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], ListOnEbayDto.prototype, "images", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], ListOnEbayDto.prototype, "price", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Type)(() => Number),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    __metadata("design:type", Number)
+], ListOnEbayDto.prototype, "quantity", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: [String] }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], ListOnEbayDto.prototype, "variantExternalIds", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: [ListingAspectDto] }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], ListOnEbayDto.prototype, "aspects", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)(),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], ListOnEbayDto.prototype, "category", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Publish to ebay.co.uk after creating the draft' }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ListOnEbayDto.prototype, "publish", void 0);
 class SearchEbayResearchDto {
     q;
     categoryId;

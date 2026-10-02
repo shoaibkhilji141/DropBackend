@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AiListResultDto = exports.ListingCopyResultDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.GenerateAiContentDto = void 0;
+exports.AiListResultDto = exports.ListingSeoResultDto = exports.ListingSeoAspectDto = exports.ListingCopyResultDto = exports.ListingCopyProductDto = exports.ListingCopySpecDto = exports.ListingFromUrlDto = exports.AiTextResultDto = exports.AiStatusDto = exports.GenerateAiContentDto = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
@@ -249,6 +249,63 @@ __decorate([
     (0, swagger_1.ApiProperty)({ type: ListingCopyProductDto }),
     __metadata("design:type", ListingCopyProductDto)
 ], ListingCopyResultDto.prototype, "product", void 0);
+class ListingSeoAspectDto {
+    name;
+    value;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { name: { required: true, type: () => String }, value: { required: true, type: () => String } };
+    }
+}
+exports.ListingSeoAspectDto = ListingSeoAspectDto;
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingSeoAspectDto.prototype, "name", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingSeoAspectDto.prototype, "value", void 0);
+class ListingSeoResultDto {
+    title;
+    descriptionHtml;
+    highlights;
+    keywords;
+    aspects;
+    model;
+    tokensUsed;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { title: { required: true, type: () => String }, descriptionHtml: { required: true, type: () => String }, highlights: { required: true, type: () => [String] }, keywords: { required: true, type: () => [String] }, aspects: { required: true, type: () => [require("./ai.dto").ListingSeoAspectDto] }, model: { required: true, type: () => String }, tokensUsed: { required: true, type: () => Number } };
+    }
+}
+exports.ListingSeoResultDto = ListingSeoResultDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'eBay title of at most 80 characters' }),
+    __metadata("design:type", String)
+], ListingSeoResultDto.prototype, "title", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Listing description as HTML' }),
+    __metadata("design:type", String)
+], ListingSeoResultDto.prototype, "descriptionHtml", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingSeoResultDto.prototype, "highlights", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingSeoResultDto.prototype, "keywords", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ type: [ListingSeoAspectDto] }),
+    __metadata("design:type", Array)
+], ListingSeoResultDto.prototype, "aspects", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", String)
+], ListingSeoResultDto.prototype, "model", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)(),
+    __metadata("design:type", Number)
+], ListingSeoResultDto.prototype, "tokensUsed", void 0);
 class AiListResultDto {
     requestId;
     type;

@@ -3,6 +3,7 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { CacheModule } from './common/cache/cache.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { HealthController } from './common/health.controller';
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -34,6 +35,7 @@ import { UsersModule } from './users/users.module';
       },
     }),
     PrismaModule,
+    CacheModule,
     RedisModule,
     JobsModule.register(),
     AuthModule,

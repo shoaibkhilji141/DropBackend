@@ -45,6 +45,9 @@ let ResearchController = class ResearchController {
     optimizeEbayListing(dto) {
         return this.insights.optimizeListing(dto.url);
     }
+    compareEbayListings(dto) {
+        return this.insights.compareListings(dto.yours, dto.competitor);
+    }
     getAliExpressInsight(externalId) {
         return this.insights.getAliExpressInsight(externalId);
     }
@@ -100,6 +103,17 @@ __decorate([
     __metadata("design:paramtypes", [product_dto_1.OptimizeEbayListingDto]),
     __metadata("design:returntype", void 0)
 ], ResearchController.prototype, "optimizeEbayListing", null);
+__decorate([
+    (0, common_1.Post)('ebay/compare'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Compare your eBay listing with a competitor that already has sales',
+    }),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [product_dto_1.CompareEbayListingsDto]),
+    __metadata("design:returntype", void 0)
+], ResearchController.prototype, "compareEbayListings", null);
 __decorate([
     (0, common_1.Get)('aliexpress/insight'),
     (0, swagger_1.ApiOperation)({

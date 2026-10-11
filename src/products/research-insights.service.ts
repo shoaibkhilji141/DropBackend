@@ -44,7 +44,11 @@ import {
   EbayItemInsightView,
   KeywordInsightsView,
   KeywordRow,
+  ListingCompareConclusion,
+  ListingCompareRow,
+  ListingCompareView,
   SalesDiagnosisItem,
+  ImageReviewView,
   SalesDiagnosisView,
   SalesHistoryView,
   SalesObservationRow,
@@ -123,8 +127,9 @@ export class ResearchInsightsService {
       throw new BadRequestException('An eBay item id is required.');
     }
 
-    const item = await this.cache.wrap(`ebay:item:${trimmed}`, ITEM_TTL_MS, () =>
-      this.ebayClient.getItemDetail(trimmed),
+    const sellerToken = await this.ebay.resolveSellerToken('').catch(() => null);
+    const item = await this.cache.wrap(`ebay:item:v6:${trimmed}`, ITEM_TTL_MS, () =>
+      this.ebayClient.getItemDetail(trimmed, { sellerToken }),
     );
 
     const seed = searchSeed(item.title);
@@ -154,6 +159,7 @@ export class ResearchInsightsService {
     const sales = this.buildSales(item, snapshots);
     const diagnosis = this.buildDiagnosis(item, peers, keywords, categoryAspects);
     const seo = await this.buildSeo(item, keywords, categoryAspects, diagnosis);
+    const imageReview = this.buildImageReview(item, seo);
 
     return {
       item,
@@ -164,6 +170,7 @@ export class ResearchInsightsService {
       seo,
       competitors: peers.slice(0, 12),
       diagnosis,
+      imageReview,
     };
   }
 
@@ -175,6 +182,35 @@ export class ResearchInsightsService {
       );
     }
     return this.getInsight(itemId);
+  }
+
+  async compareListings(yoursUrl: string, competitorUrl: string): Promise<ListingCompareView> {
+    const yoursId = this.ebayClient.listingIdFromInput(yoursUrl);
+    const competitorId = this.ebayClient.listingIdFromInput(competitorUrl);
+    if (!yoursId || !competitorId) {
+      throw new BadRequestException(
+        'Paste two full eBay listing links, for example https://www.ebay.co.uk/itm/123456789012',
+      );
+    }
+    if (yoursId === competitorId) {
+      throw new BadRequestException('Use two different listings — your product and a competitor with sales.');
+    }
+
+    const sellerToken = await this.ebay.resolveSellerToken('').catch(() => null);
+    const load = (itemId: string) =>
+      this.cache.wrap(`ebay:item:v6:${itemId}`, ITEM_TTL_MS, () =>
+        this.ebayClient.getItemDetail(itemId, { sellerToken }),
+      );
+    const [yours, competitor] = await Promise.all([load(yoursId), load(competitorId)]);
+    const diffs = this.buildCompareDiffs(yours, competitor);
+    const conclusion = await this.buildCompareConclusion(yours, competitor, diffs);
+    return {
+      yours,
+      competitor,
+      marketplace: this.marketplaceId(),
+      diffs,
+      conclusion,
+    };
   }
 
   async getAliExpressInsight(externalId: string): Promise<AliExpressInsightView> {
@@ -618,6 +654,8 @@ export class ResearchInsightsService {
         aiGenerated: true,
         note: 'Title, description and highlights were written for eBay UK (British English, ebay.co.uk). Item specifics still use eBay’s category requirements.',
         checklist: this.checklist(ai.title || fallback.recommendedTitle, item, keywords, categoryAspects),
+        mainImagePrompt: ai.mainImagePrompt || fallback.mainImagePrompt,
+        imageNotes: ai.imageNotes?.length ? ai.imageNotes : fallback.imageNotes,
       };
     } catch (error) {
       this.logger.warn(
@@ -659,6 +697,8 @@ export class ResearchInsightsService {
       checklist: this.checklist(recommendedTitle, item, keywords, categoryAspects),
       aiGenerated: false,
       note: 'Built from competitor keywords and eBay category specifics. Connect an AI key in Settings for a fuller rewrite.',
+      mainImagePrompt: this.defaultMainImagePrompt(item),
+      imageNotes: this.defaultImageNotes(item),
     };
   }
 
@@ -702,6 +742,100 @@ export class ResearchInsightsService {
         };
       })
       .sort((a, b) => Number(b.required) - Number(a.required) || Number(b.usedForSearch) - Number(a.usedForSearch));
+  }
+
+  private photoCounts(item: EbayItemDetail): { total: number; showcase: number; variation: number } {
+    const variation = item.variations.filter((row) => row.imageUrl).length;
+    const showcase = item.showcaseImages?.length
+      ? item.showcaseImages.length
+      : Math.max(0, item.images.length - variation);
+    return { total: item.images.length, showcase, variation };
+  }
+
+  private photoChangeText(item: EbayItemDetail): string {
+    const { total, showcase, variation } = this.photoCounts(item);
+    const split = `${showcase} product show-case photo${showcase === 1 ? '' : 's'} + ${variation} variation photo${variation === 1 ? '' : 's'} (${total} total)`;
+    if (total >= 8) {
+      return `${split}. Keep picture 1 as a clean, sharp main image on a light background.`;
+    }
+    if (showcase === 0 && variation > 0) {
+      return `${split}. Variation shots are not the full gallery — add scale, in-use, contents and extra angles. eBay allows 12.`;
+    }
+    return `${split}. eBay allows 12 — add clear angles, each colour, scale and what is in the box.`;
+  }
+
+  private buildImageReview(
+    item: EbayItemDetail,
+    seo: SeoRecommendationView,
+  ): ImageReviewView {
+    const { total, showcase, variation } = this.photoCounts(item);
+    const issues = [...(seo.imageNotes ?? [])];
+    const strengths: string[] = [];
+    if (total === 0) {
+      issues.unshift('No listing photos were returned. Download the product shot from the supplier and generate a main image first.');
+    } else if (showcase === 0 && variation > 0) {
+      issues.unshift(
+        `Only ${variation} variation photo${variation === 1 ? '' : 's'} were found. The product show-case gallery (scale, lifestyle, box contents) still needs to be counted and improved.`,
+      );
+    } else if (total < 6) {
+      issues.unshift(`Only ${total} photos (${showcase} show-case, ${variation} variation). Sold listings usually show 8–12.`);
+    } else {
+      strengths.push(`${total} photos: ${showcase} product show-case and ${variation} variation.`);
+    }
+    if (item.variations.length > 1) {
+      const missing = item.variations.filter((row) => !row.imageUrl).length;
+      if (missing) {
+        issues.push(`${missing} variations have no own photo. Buyers skip colour/size options they cannot see.`);
+      } else {
+        strengths.push('Each variation has its own photo.');
+      }
+    }
+    const uniqueIssues = [...new Set(issues)].slice(0, 6);
+    const summary =
+      total === 0
+        ? 'No photos could be read from this listing.'
+        : uniqueIssues.length
+          ? 'Current photos are usable as a product reference, but they are not a finished eBay UK main image.'
+          : 'Photos look complete. Still generate a cleaner picture 1 if the first shot is cluttered or cropped.';
+
+    return {
+      count: total,
+      showcaseCount: showcase,
+      variationCount: variation,
+      referenceImageUrl: item.showcaseImages?.[0] ?? item.images[0] ?? null,
+      summary,
+      issues: uniqueIssues,
+      strengths,
+      mainImagePrompt: seo.mainImagePrompt || this.defaultMainImagePrompt(item),
+      howToUse:
+        'Copy the prompt. Open ChatGPT, Gemini or Midjourney. Attach the reference photo below as the only product image. Paste the prompt. Save the result at 1600×1600 and upload it as eBay picture 1.',
+    };
+  }
+
+  private defaultMainImagePrompt(item: EbayItemDetail): string {
+    const extras = item.aspects
+      .slice(0, 6)
+      .map((aspect) => `${aspect.name} ${aspect.value}`)
+      .join(', ');
+    return [
+      `Create one eBay UK main listing photo for this exact product: ${item.title}.`,
+      extras ? `Visible product facts: ${extras}.` : '',
+      'Use the attached photo as the only product reference. Keep the same product — same shape, colour, materials, size and parts. Do not invent a different item, brand logo, or extra accessories that are not in the reference.',
+      'Style: clean light grey or white studio background, even soft lighting, true colour, sharp focus, product filling 80–90% of a square 1600×1600 frame.',
+      'No text, badges, watermarks, price tags, hands, busy lifestyle props, or collage. Marketplace-ready picture 1 only.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  private defaultImageNotes(item: EbayItemDetail): string[] {
+    const notes = [
+      'Picture 1 must be a clean studio shot, not a cropped marketplace thumbnail.',
+      'Show the full product, true colour, and enough space around it for eBay’s gallery crop.',
+    ];
+    if (item.images.length < 6) notes.push('Add more angles after the main image: scale, in-use, back and contents.');
+    if (item.variations.length > 1) notes.push('Each colour or size needs its own clear photo.');
+    return notes;
   }
 
   private buildDiagnosis(
@@ -761,9 +895,9 @@ export class ResearchInsightsService {
         id: 'photos',
         title: 'High-quality photos',
         priority: 'high',
-        status: item.images.length >= 6 ? 'pass' : item.images.length >= 3 ? 'warn' : 'fail',
-        change: `${item.images.length} photos found. Add clear angles, colour, condition and any defects — eBay allows 12.`,
-        why: 'Photos create purchase confidence. Weak images lose buyers who already clicked through.',
+        status: item.images.length >= 8 ? 'pass' : item.images.length >= 4 ? 'warn' : 'fail',
+        change: this.photoChangeText(item),
+        why: 'The first photo wins the click. Weak or cropped supplier shots lose buyers who already opened the listing.',
       },
       {
         id: 'price',
@@ -994,6 +1128,212 @@ export class ResearchInsightsService {
         .filter((product): product is { id: string; externalId: string } => product.externalId !== null)
         .map((product) => [product.externalId, product.id]),
     );
+  }
+
+  private buildCompareDiffs(yours: EbayItemDetail, competitor: EbayItemDetail): ListingCompareRow[] {
+    const yourLanded = yours.price + (yours.shippingCost ?? 0);
+    const theirLanded = competitor.price + (competitor.shippingCost ?? 0);
+    const yourPhotos = this.photoCounts(yours);
+    const theirPhotos = this.photoCounts(competitor);
+    const yourWords = new Set(this.titleWords(yours.title));
+    const theirExtra = this.titleWords(competitor.title).filter((word) => !yourWords.has(word));
+    const yourAspects = new Map(yours.aspects.map((row) => [row.name.toLowerCase(), row.value]));
+    const missingSpecifics = competitor.aspects
+      .filter((row) => !yourAspects.has(row.name.toLowerCase()))
+      .map((row) => row.name);
+    const yourDesc = (yours.shortDescription || htmlPreview(yours.descriptionHtml) || '').length;
+    const theirDesc = (competitor.shortDescription || htmlPreview(competitor.descriptionHtml) || '').length;
+
+    return [
+      {
+        id: 'sales',
+        title: 'Sales',
+        yours: `${yours.soldCount} sold`,
+        competitor: `${competitor.soldCount} sold`,
+        verdict:
+          yours.soldCount === competitor.soldCount ? 'same' : yours.soldCount > competitor.soldCount ? 'ahead' : 'behind',
+        note:
+          competitor.soldCount > yours.soldCount
+            ? 'This competitor already has buyers. Copy what is converting, not just the product type.'
+            : yours.soldCount > competitor.soldCount
+              ? 'Your listing already outsells this comparison. Use the other gaps only if they still look stronger.'
+              : 'Sold counts are level. Look at price, photos and title for the next gain.',
+      },
+      {
+        id: 'title',
+        title: 'Title / search words',
+        yours: `${yours.title.length}/80 characters`,
+        competitor: `${competitor.title.length}/80 characters`,
+        verdict: theirExtra.length === 0 ? (yours.title.length >= competitor.title.length ? 'same' : 'behind') : 'behind',
+        note: theirExtra.length
+          ? `Competitor title uses words yours does not: ${theirExtra.slice(0, 8).join(', ')}.`
+          : 'Titles cover similar words. Keep yours 60–80 characters and readable.',
+      },
+      {
+        id: 'price',
+        title: 'Delivered price',
+        yours: `£${yourLanded.toFixed(2)}${yours.shippingCost != null ? ` (item £${yours.price.toFixed(2)} + postage £${yours.shippingCost.toFixed(2)})` : ''}`,
+        competitor: `£${theirLanded.toFixed(2)}${competitor.shippingCost != null ? ` (item £${competitor.price.toFixed(2)} + postage £${competitor.shippingCost.toFixed(2)})` : ''}`,
+        verdict: yourLanded === theirLanded ? 'same' : yourLanded < theirLanded ? 'ahead' : 'behind',
+        note:
+          yourLanded > theirLanded
+            ? `You are £${(yourLanded - theirLanded).toFixed(2)} more expensive delivered. Buyers sort and compare item + postage.`
+            : yourLanded < theirLanded
+              ? 'Your delivered total is cheaper. Keep dispatch honest so the lower price still converts.'
+              : 'Delivered totals match. Compete on photos, title and trust.',
+      },
+      {
+        id: 'photos',
+        title: 'Photos',
+        yours: `${yourPhotos.showcase} show-case + ${yourPhotos.variation} variation (${yourPhotos.total})`,
+        competitor: `${theirPhotos.showcase} show-case + ${theirPhotos.variation} variation (${theirPhotos.total})`,
+        verdict: yourPhotos.total === theirPhotos.total ? 'same' : yourPhotos.total > theirPhotos.total ? 'ahead' : 'behind',
+        note:
+          yourPhotos.showcase < Math.max(4, theirPhotos.showcase)
+            ? 'They show more product angles — scale, in-use, colours and what is in the box — not only variation shots.'
+            : 'Photo count is competitive. Picture 1 still has to look like a clean main image.',
+      },
+      {
+        id: 'specifics',
+        title: 'Item specifics',
+        yours: `${yours.aspects.length} filled`,
+        competitor: `${competitor.aspects.length} filled`,
+        verdict:
+          missingSpecifics.length === 0
+            ? yours.aspects.length >= competitor.aspects.length
+              ? 'same'
+              : 'behind'
+            : 'behind',
+        note: missingSpecifics.length
+          ? `They list specifics you do not: ${missingSpecifics.slice(0, 8).join(', ')}.`
+          : 'Specifics look similarly complete.',
+      },
+      {
+        id: 'description',
+        title: 'Description',
+        yours: yourDesc ? `${yourDesc} characters` : 'Thin or missing',
+        competitor: theirDesc ? `${theirDesc} characters` : 'Thin or missing',
+        verdict: yourDesc === theirDesc ? 'same' : yourDesc > theirDesc ? 'ahead' : 'behind',
+        note:
+          yourDesc < 80 || yourDesc + 80 < theirDesc
+            ? 'Their description answers more buyer questions. Add what is included, size, power and UK postage/returns.'
+            : 'Description length is in a similar range.',
+      },
+      {
+        id: 'variations',
+        title: 'Variations',
+        yours: `${yours.variations.length || 1} listed`,
+        competitor: `${competitor.variations.length || 1} listed`,
+        verdict:
+          yours.variations.length === competitor.variations.length
+            ? 'same'
+            : yours.variations.length > competitor.variations.length
+              ? 'ahead'
+              : 'behind',
+        note:
+          (competitor.variations.length || 1) > (yours.variations.length || 1)
+            ? 'They offer more options. Missing colours or sizes send the buyer to the listing that has them.'
+            : 'Option count is similar. Keep stock on the variations buyers actually pick.',
+      },
+      {
+        id: 'trust',
+        title: 'Seller trust',
+        yours: this.trustLabel(yours),
+        competitor: this.trustLabel(competitor),
+        verdict:
+          (yours.sellerFeedbackScore ?? 0) === (competitor.sellerFeedbackScore ?? 0)
+            ? 'same'
+            : (yours.sellerFeedbackScore ?? 0) > (competitor.sellerFeedbackScore ?? 0)
+              ? 'ahead'
+              : 'behind',
+        note:
+          (competitor.sellerFeedbackScore ?? 0) > (yours.sellerFeedbackScore ?? 0)
+            ? 'A newer or quieter account has to win with clearer photos, honest postage and complete specifics.'
+            : 'Trust signals are not the main gap. Fix the listing content first.',
+      },
+      {
+        id: 'returns',
+        title: 'Returns',
+        yours: yours.returnsAccepted == null ? 'Not shown' : yours.returnsAccepted ? 'Accepted' : 'Not accepted',
+        competitor:
+          competitor.returnsAccepted == null
+            ? 'Not shown'
+            : competitor.returnsAccepted
+              ? 'Accepted'
+              : 'Not accepted',
+        verdict:
+          yours.returnsAccepted === competitor.returnsAccepted
+            ? 'same'
+            : yours.returnsAccepted
+              ? 'ahead'
+              : 'behind',
+        note: 'Clear UK returns reduce purchase fear, especially against a listing that already has sales.',
+      },
+    ];
+  }
+
+  private titleWords(title: string): string[] {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length > 2);
+  }
+
+  private trustLabel(item: EbayItemDetail): string {
+    const score = item.sellerFeedbackScore ?? 0;
+    const positive = item.sellerFeedbackPercentage != null ? `${item.sellerFeedbackPercentage}% positive` : '';
+    const rated = item.topRatedSeller ? 'Top-rated' : `${score} feedback`;
+    return [rated, positive].filter(Boolean).join(', ');
+  }
+
+  private async buildCompareConclusion(
+    yours: EbayItemDetail,
+    competitor: EbayItemDetail,
+    diffs: ListingCompareRow[],
+  ): Promise<ListingCompareConclusion> {
+    const fallback = this.heuristicCompareConclusion(yours, competitor, diffs);
+    try {
+      const ai = await this.withTimeout(
+        this.ai.generateListingCompare({
+          yoursTitle: yours.title,
+          competitorTitle: competitor.title,
+          yoursSold: yours.soldCount,
+          competitorSold: competitor.soldCount,
+          diffs: diffs.map((row) => `${row.title}: you ${row.yours} vs them ${row.competitor}. ${row.note}`),
+        }),
+        12_000,
+      );
+      return {
+        summary: ai.summary || fallback.summary,
+        firstMove: ai.firstMove || fallback.firstMove,
+        actions: ai.actions.length ? ai.actions : fallback.actions,
+        aiGenerated: true,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Compare conclusion fell back to heuristics: ${error instanceof Error ? error.message : error}`,
+      );
+      return fallback;
+    }
+  }
+
+  private heuristicCompareConclusion(
+    yours: EbayItemDetail,
+    competitor: EbayItemDetail,
+    diffs: ListingCompareRow[],
+  ): ListingCompareConclusion {
+    const behind = diffs.filter((row) => row.verdict === 'behind');
+    const first = behind[0] ?? diffs[0];
+    return {
+      summary:
+        competitor.soldCount > yours.soldCount
+          ? `The competitor has ${competitor.soldCount} sales vs your ${yours.soldCount}. The gaps below are why buyers pick them.`
+          : `Sales are close (${yours.soldCount} vs ${competitor.soldCount}). The remaining gaps are what to change next.`,
+      firstMove: first ? `First change: ${first.title}. ${first.note}` : 'Listings look similar. Test one change at a time.',
+      actions: behind.slice(0, 5).map((row) => `${row.title}: ${row.note}`),
+      aiGenerated: false,
+    };
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

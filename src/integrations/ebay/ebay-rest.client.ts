@@ -114,6 +114,7 @@ export interface EbayItemVariation {
   soldCount: number;
   specifics: { name: string; value: string }[];
   label: string;
+  imageUrl: string | null;
 }
 
 export interface EbayItemDetail {
@@ -122,7 +123,11 @@ export interface EbayItemDetail {
   title: string;
   subtitle: string | null;
   images: string[];
+  /** Listing gallery / show-case shots (not just one photo per variation). */
+  showcaseImages: string[];
   price: number;
+  /** Highest variation price when the listing is a range. Same as `price` for a single SKU. */
+  priceMax: number;
   currency: string;
   itemUrl: string;
   purchaseHistoryUrl: string | null;
@@ -163,8 +168,13 @@ interface BrowseItemDetailPayload extends BrowseItemPayload {
   description?: string;
   price?: { value?: string; currency?: string };
   currentBidPrice?: { value?: string; currency?: string };
+  marketingPrice?: {
+    originalPrice?: { value?: string; currency?: string };
+    discountAmount?: { value?: string; currency?: string };
+  };
   image?: { imageUrl?: string };
   additionalImages?: { imageUrl?: string }[];
+  thumbnailImages?: { imageUrl?: string }[];
   itemWebUrl?: string;
   condition?: string;
   categoryId?: string;
@@ -596,34 +606,15 @@ export class EbayRestClient {
   ): Promise<EbayItemDetail> {
     let browse: EbayItemDetail | null = null;
     try {
-      const token = await this.applicationToken();
-      const numeric = this.numericItemId(itemId);
-      const params = new URLSearchParams(
-        itemId.startsWith('v1|')
-          ? {}
-          : { legacy_item_id: numeric || itemId },
-      );
-      if (options?.variationId && !itemId.startsWith('v1|')) {
-        params.set('legacy_variation_id', options.variationId);
-      }
-      const url = itemId.startsWith('v1|')
-        ? `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`
-        : `${this.hosts().api}/buy/browse/v1/item/get_item_by_legacy_id?${params.toString()}`;
-      const payload = await this.request<BrowseItemDetailPayload>('GET', url, token);
-      browse = this.mapItemDetail(payload, itemId);
-      const variations = await this.browseVariations(payload, itemId);
-      if (variations.length) {
-        browse = {
-          ...browse,
-          variations,
-          availableQuantity: variations.reduce((sum, variation) => sum + variation.quantity, 0),
-          price: this.pickBrowseVariationPrice(browse.price, variations, options?.variationId),
-        };
-      }
+      browse = await this.browseItemOrGroup(itemId, options?.variationId);
     } catch (error) {
       this.logger.warn(
         `Browse item ${itemId} failed: ${error instanceof Error ? error.message : error}`,
       );
+    }
+    if (browse) {
+      browse = await this.enrichFromShopping(browse);
+      browse = await this.attachListingGallery(browse, options?.sellerToken);
     }
 
     if (options?.sellerToken) {
@@ -634,17 +625,20 @@ export class EbayRestClient {
           options.variationId,
         );
         if (browse && (browse.price > 0 || browse.variations.length)) {
-          return {
+          const merged = {
             ...browse,
+            images: this.mergeImages(trading.images, browse.images),
             availableQuantity: trading.variations.length
               ? trading.availableQuantity
               : browse.availableQuantity ?? trading.availableQuantity,
             soldCount: trading.soldCount || browse.soldCount,
             price: browse.price > 0 ? browse.price : trading.price,
+            priceMax: browse.priceMax > 0 ? browse.priceMax : trading.priceMax,
             variations: trading.variations.length ? trading.variations : browse.variations,
           };
+          return this.withPriceRange(merged);
         }
-        return trading;
+        return this.withPriceRange(trading);
       } catch (error) {
         this.logger.warn(
           `Trading GetItem ${itemId} failed: ${error instanceof Error ? error.message : error}`,
@@ -652,8 +646,117 @@ export class EbayRestClient {
       }
     }
 
-    if (browse && (browse.price > 0 || browse.variations.length > 0)) return browse;
+    if (browse && (browse.price > 0 || browse.images.length > 0 || browse.variations.length > 0)) {
+      return this.withPriceRange(browse);
+    }
     throw new Error(`Could not read eBay listing ${itemId}`);
+  }
+
+  private async browseItemOrGroup(
+    itemId: string,
+    variationId?: string | null,
+  ): Promise<EbayItemDetail> {
+    const token = await this.applicationToken();
+    const numeric = this.numericItemId(itemId) || itemId;
+    try {
+      const payload = await this.request<BrowseItemDetailPayload>(
+        'GET',
+        this.browseItemUrl(itemId, variationId),
+        token,
+      );
+      const mapped = this.mapItemDetail(payload, itemId);
+      const variations = await this.browseVariations(payload, itemId);
+      if (!variations.length) return mapped;
+      return this.withPriceRange({
+        ...mapped,
+        images: this.mergeImages(mapped.images, ...variations.map((row) => row.imageUrl)),
+        variations,
+        availableQuantity: variations.reduce((sum, variation) => sum + variation.quantity, 0),
+        price: this.pickBrowseVariationPrice(mapped.price, variations, variationId),
+      });
+    } catch (error) {
+      if (!this.isItemGroupError(error) && !/not found|11001/i.test(error instanceof Error ? error.message : '')) {
+        throw error;
+      }
+      this.logger.warn(
+        `Browse single item ${itemId} unavailable, trying item group: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
+    if (!itemId.startsWith('v1|')) {
+      try {
+        const restId = `v1|${numeric}|0`;
+        const payload = await this.request<BrowseItemDetailPayload>(
+          'GET',
+          this.browseItemUrl(restId),
+          token,
+        );
+        return this.mapItemDetail(payload, restId);
+      } catch {
+        // Variation groups often have no |0 child — fall through to the group endpoint.
+      }
+    }
+
+    const grouped = await this.browseItemGroupDetail(numeric, variationId);
+    if (!grouped) throw new Error(`Could not read eBay listing ${itemId}`);
+    return grouped;
+  }
+
+  private isItemGroupError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /legacy Id is invalid|get_items_by_item_group|errorId["\s:>]+11006|11006/i.test(message);
+  }
+
+  private async browseItemGroupDetail(
+    groupId: string,
+    variationId?: string | null,
+  ): Promise<EbayItemDetail | null> {
+    const token = await this.applicationToken();
+    const data = await this.request<{
+      items?: BrowseItemDetailPayload[];
+      commonDescriptions?: { description?: string }[];
+    }>(
+      'GET',
+      `${this.hosts().api}/buy/browse/v1/item/get_items_by_item_group?item_group_id=${encodeURIComponent(groupId)}`,
+      token,
+    );
+    const items = data.items ?? [];
+    if (items.length === 0) return null;
+    const preferred =
+      (variationId
+        ? items.find(
+            (item) =>
+              String(item.itemId ?? '').includes(variationId) ||
+              String(item.itemWebUrl ?? '').includes(variationId),
+          )
+        : undefined) ?? items[0];
+    const preferredFull = await this.browseFullItem(preferred);
+    const mapped = this.mapItemDetail(preferredFull ?? preferred, groupId);
+    const variations = items.map((item) => this.mapBrowseVariation(item));
+    const description = data.commonDescriptions?.[0]?.description;
+    const shipping = this.cheapestShipping(items);
+    return this.withPriceRange({
+      ...mapped,
+      itemId: this.numericItemId(groupId) || mapped.itemId,
+      legacyItemId: this.numericItemId(groupId) || groupId,
+      itemUrl: this.itemUrl(this.numericItemId(groupId) || groupId) || mapped.itemUrl,
+      descriptionHtml: mapped.descriptionHtml || description || mapped.descriptionHtml,
+      images: this.mergeImages(
+        mapped.images,
+        preferredFull ? this.collectBrowseImages(preferredFull) : [],
+        items.flatMap((item) => this.collectBrowseImages(item)),
+        this.imagesFromHtml(description),
+      ),
+      variations,
+      availableQuantity: variations.reduce((sum, variation) => sum + variation.quantity, 0),
+      soldCount: Math.max(
+        mapped.soldCount,
+        variations.reduce((sum, variation) => sum + variation.soldCount, 0),
+      ),
+      shippingCost: shipping.cost ?? mapped.shippingCost,
+      shippingService: shipping.service ?? mapped.shippingService,
+      price: this.pickBrowseVariationPrice(mapped.price, variations, variationId),
+    });
   }
 
   private pickBrowseVariationPrice(
@@ -665,7 +768,9 @@ export class EbayRestClient {
       const match = variations.find((variation) => variation.sku === variationId);
       if (match && match.price > 0) return match.price;
     }
-    return variations.find((variation) => variation.price > 0)?.price || fallback;
+    const priced = variations.map((variation) => variation.price).filter((price) => price > 0);
+    if (priced.length) return Math.min(...priced);
+    return fallback;
   }
 
   private async browseVariations(
@@ -707,15 +812,17 @@ export class EbayRestClient {
     const parts = itemId.split('|');
     const sku = parts.length >= 3 && parts[2] && parts[2] !== '0' ? parts[2] : null;
     const quantityRaw = availability?.estimatedAvailableQuantity;
+    const money = this.browseMoney(item.price) ?? this.browseMoney(item.currentBidPrice);
     return {
       sku,
-      price: Number(item.price?.value ?? item.currentBidPrice?.value ?? 0) || 0,
-      currency: item.price?.currency ?? this.currency(),
+      price: money?.value || 0,
+      currency: money?.currency ?? this.currency(),
       quantity:
         quantityRaw != null && Number.isFinite(Number(quantityRaw)) ? Math.max(0, Number(quantityRaw)) : 0,
       soldCount: Math.max(0, Number(availability?.estimatedSoldQuantity ?? 0) || 0),
       specifics,
       label: specifics.map((row) => row.value).filter(Boolean).join(' / ') || sku || 'Variation',
+      imageUrl: this.upgradeEbayImage(item.image?.imageUrl ?? null),
     };
   }
 
@@ -727,21 +834,21 @@ export class EbayRestClient {
     const availability = payload.estimatedAvailabilities?.[0];
     const start = this.parseFindingDate(payload.itemCreationDate);
     const age = start ? Math.max(0, Math.round((Date.now() - start.getTime()) / 86_400_000)) : null;
-    const images = [
-      payload.image?.imageUrl,
-      ...(payload.additionalImages ?? []).map((image) => image.imageUrl),
-    ].filter((url): url is string => typeof url === 'string' && url.length > 0);
-    const shipping = payload.shippingOptions?.[0];
+    const money = this.browseMoney(payload.price) ?? this.browseMoney(payload.currentBidPrice);
+    const shipping = this.cheapestShipping([payload]);
     const feedback = Number(payload.seller?.feedbackPercentage ?? NaN);
+    const price = money?.value || 0;
 
     return {
       itemId,
       legacyItemId,
       title: String(payload.title ?? 'eBay item'),
       subtitle: payload.subtitle ?? null,
-      images: [...new Set(images)],
-      price: Number(payload.price?.value ?? payload.currentBidPrice?.value ?? 0),
-      currency: payload.price?.currency ?? this.currency(),
+      images: this.collectBrowseImages(payload),
+      showcaseImages: [],
+      price,
+      priceMax: price,
+      currency: money?.currency ?? this.currency(),
       itemUrl: String(payload.itemWebUrl ?? (legacyItemId ? this.itemUrl(legacyItemId) : '') ?? ''),
       purchaseHistoryUrl: this.purchaseHistoryUrl(legacyItemId ?? itemId),
       condition: payload.condition ?? null,
@@ -767,8 +874,8 @@ export class EbayRestClient {
         availability?.estimatedAvailableQuantity != null
           ? Number(availability.estimatedAvailableQuantity)
           : null,
-      shippingCost: shipping?.shippingCost?.value != null ? Number(shipping.shippingCost.value) : null,
-      shippingService: shipping?.shippingServiceCode ?? null,
+      shippingCost: shipping.cost,
+      shippingService: shipping.service,
       itemLocation: [payload.itemLocation?.city, payload.itemLocation?.country]
         .filter(Boolean)
         .join(', ') || null,
@@ -777,6 +884,425 @@ export class EbayRestClient {
       listingAgeDays: age,
       variations: [],
     };
+  }
+
+  private browseItemUrl(itemId: string, variationId?: string | null): string {
+    if (itemId.startsWith('v1|')) {
+      return `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`;
+    }
+    const params = new URLSearchParams({
+      legacy_item_id: this.numericItemId(itemId) || itemId,
+    });
+    if (variationId) params.set('legacy_variation_id', variationId);
+    return `${this.hosts().api}/buy/browse/v1/item/get_item_by_legacy_id?${params.toString()}`;
+  }
+
+  private async browseFullItem(
+    item: BrowseItemDetailPayload,
+  ): Promise<BrowseItemDetailPayload | null> {
+    const itemId = String(item.itemId ?? '');
+    if (!itemId) return null;
+    try {
+      const token = await this.applicationToken();
+      return await this.request<BrowseItemDetailPayload>(
+        'GET',
+        `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}?fieldgroups=PRODUCT`,
+        token,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Browse full item ${itemId} failed: ${error instanceof Error ? error.message : error}`,
+      );
+      return null;
+    }
+  }
+
+  private browseMoney(
+    amount?: { value?: string; currency?: string } | null,
+  ): { value: number; currency: string } | null {
+    if (amount?.value == null || amount.value === '') return null;
+    const value = Number(amount.value);
+    if (!Number.isFinite(value) || value < 0) return null;
+    return { value, currency: amount.currency || this.currency() };
+  }
+
+  private cheapestShipping(items: BrowseItemDetailPayload[]): {
+    cost: number | null;
+    service: string | null;
+  } {
+    let best: { cost: number; service: string | null } | null = null;
+    for (const item of items) {
+      for (const option of item.shippingOptions ?? []) {
+        const money = this.browseMoney(option.shippingCost);
+        if (!money) continue;
+        if (!best || money.value < best.cost) {
+          best = { cost: money.value, service: option.shippingServiceCode ?? null };
+        }
+      }
+    }
+    return best ?? { cost: null, service: null };
+  }
+
+  private collectBrowseImages(payload: BrowseItemDetailPayload): string[] {
+    return this.mergeImages(
+      payload.image?.imageUrl,
+      ...(payload.additionalImages ?? []).map((image) => image.imageUrl),
+      ...(payload.thumbnailImages ?? []).map((image) => image.imageUrl),
+      ...this.imagesFromHtml(payload.description),
+    );
+  }
+
+  private imagesFromHtml(html?: string | null): string[] {
+    if (!html) return [];
+    return [...html.matchAll(/https?:\/\/i\.ebayimg\.com\/[^"'\\\s>]+/gi)].map((match) => match[0]);
+  }
+
+  private mergeImages(...urls: Array<string | string[] | null | undefined>): string[] {
+    const seen = new Set<string>();
+    const images: string[] = [];
+    for (const raw of urls.flat()) {
+      const upgraded = this.upgradeEbayImage(raw);
+      if (!upgraded) continue;
+      const key = this.imageKey(upgraded);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      images.push(upgraded);
+    }
+    return images;
+  }
+
+  private upgradeEbayImage(url?: string | null): string | null {
+    if (!url) return null;
+    let next = url.trim();
+    if (next.startsWith('//')) next = `https:${next}`;
+    if (next.startsWith('http://')) next = `https://${next.slice(7)}`;
+    if (!/^https?:\/\//i.test(next)) return null;
+    next = next.replace(/\/thumbs\/images\//i, '/images/');
+    next = next.replace(/\/s-l\d+(\.(?:jpe?g|png|webp))/i, '/s-l1600$1');
+    next = next.replace(/\/\$(_\d+)\.(jpe?g|png|webp)/i, '/$_57.$2');
+    return next;
+  }
+
+  private imageKey(url: string): string {
+    const hash = url.match(/\/g\/([^/?]+)/i)?.[1] ?? url.match(/\/z\/([^/?]+)/i)?.[1];
+    if (hash) return hash.toLowerCase();
+    return url.replace(/\/s-l\d+/i, '').replace(/\/\$_\d+\./i, '/').toLowerCase();
+  }
+
+  private withPriceRange(detail: EbayItemDetail): EbayItemDetail {
+    const prices = [detail.price, detail.priceMax, ...detail.variations.map((row) => row.price)].filter(
+      (price) => Number.isFinite(price) && price > 0,
+    );
+    if (!prices.length) return { ...detail, priceMax: detail.price || 0 };
+    return {
+      ...detail,
+      price: Math.min(...prices),
+      priceMax: Math.max(...prices),
+    };
+  }
+
+  private async enrichFromShopping(detail: EbayItemDetail): Promise<EbayItemDetail> {
+    const listingId = detail.legacyItemId || this.numericItemId(detail.itemId);
+    if (!listingId) return detail;
+    try {
+      const params = new URLSearchParams({
+        callname: 'GetSingleItem',
+        responseencoding: 'JSON',
+        appid: this.config().appId,
+        siteid: this.siteId(),
+        version: '967',
+        IncludeSelector: 'Details,Variations,TextDescription',
+        ItemID: listingId,
+      });
+      const response = await fetch(`https://open.api.ebay.com/shopping?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        Ack?: string;
+        ack?: string;
+        Item?: Record<string, unknown>;
+      };
+      if (!response.ok || /^failure$/i.test(String(payload.Ack ?? payload.ack ?? ''))) {
+        this.logger.warn(
+          `Shopping GetSingleItem ${listingId} returned ${response.status} ${String(payload.Ack ?? payload.ack ?? '')}`,
+        );
+        return detail;
+      }
+      const item = payload.Item;
+      if (!item) return detail;
+
+      const pictures = this.ebayImageUrlsFromUnknown(
+        item.PictureURL ?? item.pictureURL ?? item.GalleryURL ?? item.galleryURL,
+      );
+      const variationPictures = this.shoppingVariationPictures(item);
+      const nestedPictures = this.ebayImageUrlsFromUnknown(item);
+      const converted = this.shoppingMoney(item.ConvertedCurrentPrice ?? item.convertedCurrentPrice);
+      const current = this.shoppingMoney(item.CurrentPrice ?? item.currentPrice);
+      const gbp = [converted, current].find((row) => row && row.currency === this.currency()) ?? converted ?? current;
+      const shipping = this.shoppingMoney(
+        (item.ShippingCostSummary as Record<string, unknown> | undefined)?.ShippingServiceCost ??
+          (item.shippingCostSummary as Record<string, unknown> | undefined)?.shippingServiceCost,
+      );
+
+      const next: EbayItemDetail = {
+        ...detail,
+        images: this.mergeImages(pictures, variationPictures, nestedPictures, detail.images),
+        price: gbp && gbp.value > 0 ? gbp.value : detail.price,
+        currency: gbp?.currency || detail.currency,
+        shippingCost: shipping && shipping.value >= 0 ? shipping.value : detail.shippingCost,
+      };
+      return this.withPriceRange(next);
+    } catch (error) {
+      this.logger.warn(
+        `Shopping GetSingleItem ${listingId} failed: ${error instanceof Error ? error.message : error}`,
+      );
+      return detail;
+    }
+  }
+
+  private shoppingMoney(value: unknown): { value: number; currency: string } | null {
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? { value, currency: this.currency() } : null;
+    }
+    if (typeof value === 'object') {
+      const row = value as { Value?: number | string; value?: number | string; CurrencyID?: string; currencyId?: string };
+      const amount = Number(row.Value ?? row.value ?? NaN);
+      if (!Number.isFinite(amount) || amount < 0) return null;
+      return { value: amount, currency: row.CurrencyID ?? row.currencyId ?? this.currency() };
+    }
+    return null;
+  }
+
+  private shoppingVariationPictures(item: Record<string, unknown>): string[] {
+    const variations = (item.Variations ?? item.variations) as Record<string, unknown> | undefined;
+    const pictures = (variations?.Pictures ?? variations?.pictures) as unknown;
+    const rows = Array.isArray(pictures) ? pictures : pictures ? [pictures] : [];
+    const urls: string[] = [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const sets =
+        (row as { VariationSpecificPictureSet?: unknown; variationSpecificPictureSet?: unknown })
+          .VariationSpecificPictureSet ??
+        (row as { variationSpecificPictureSet?: unknown }).variationSpecificPictureSet;
+      const list = Array.isArray(sets) ? sets : sets ? [sets] : [];
+      for (const set of list) {
+        if (!set || typeof set !== 'object') continue;
+        const field = (set as { PictureURL?: unknown; pictureURL?: unknown }).PictureURL
+          ?? (set as { pictureURL?: unknown }).pictureURL;
+        urls.push(...this.ebayImageUrlsFromUnknown(field));
+      }
+    }
+    return urls;
+  }
+
+  private ebayImageUrlsFromUnknown(value: unknown, depth = 0): string[] {
+    if (value == null || depth > 8) return [];
+    if (typeof value === 'string') {
+      return /i\.ebayimg\.com/i.test(value) ? [value] : [];
+    }
+    if (Array.isArray(value)) {
+      return value.flatMap((row) => this.ebayImageUrlsFromUnknown(row, depth + 1));
+    }
+    if (typeof value === 'object') {
+      return Object.values(value).flatMap((row) => this.ebayImageUrlsFromUnknown(row, depth + 1));
+    }
+    return [];
+  }
+
+  private async attachListingGallery(
+    detail: EbayItemDetail,
+    sellerToken?: string | null,
+  ): Promise<EbayItemDetail> {
+    const listingId = detail.legacyItemId || this.numericItemId(detail.itemId);
+    const showcaseChunks: Array<string | string[] | null | undefined> = [detail.showcaseImages];
+    const extraChunks: Array<string | string[] | null | undefined> = [
+      detail.images,
+      ...detail.variations.map((row) => row.imageUrl),
+    ];
+
+    if (listingId) {
+      const shopping = await this.shoppingGallery(listingId);
+      showcaseChunks.push(shopping.showcase);
+      extraChunks.push(shopping.variation);
+    }
+
+    if (sellerToken && listingId) {
+      try {
+        const trading = await this.tradingGallery(sellerToken, listingId);
+        showcaseChunks.push(trading.showcase);
+        extraChunks.push(trading.variation);
+      } catch (error) {
+        this.logger.warn(
+          `Trading gallery ${listingId} failed: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+
+    if (listingId) {
+      extraChunks.push(await this.descriptionFrameImages(listingId));
+      extraChunks.push(
+        await this.listingPageImages(detail.itemUrl || `https://www.ebay.co.uk/itm/${listingId}`),
+      );
+    }
+
+    const showcaseImages = this.mergeImages(...showcaseChunks);
+    const images = this.mergeImages(showcaseImages, ...extraChunks);
+    return { ...detail, showcaseImages, images };
+  }
+
+  private async shoppingGallery(
+    listingId: string,
+  ): Promise<{ showcase: string[]; variation: string[] }> {
+    try {
+      const params = new URLSearchParams({
+        callname: 'GetSingleItem',
+        responseencoding: 'XML',
+        appid: this.config().appId,
+        siteid: this.siteId(),
+        version: '967',
+        IncludeSelector: 'Details,Variations,TextDescription',
+        ItemID: listingId,
+      });
+      const response = await fetch(`https://open.api.ebay.com/shopping?${params.toString()}`, {
+        headers: { Accept: 'application/xml,text/xml' },
+      });
+      const xml = await response.text();
+      if (!response.ok || /<Ack>Failure<\/Ack>/i.test(xml)) {
+        this.logger.warn(`Shopping XML gallery ${listingId} failed (${response.status})`);
+        return { showcase: [], variation: [] };
+      }
+      return this.splitGalleryXml(this.xmlBlocks(xml, 'Item')[0] ?? xml);
+    } catch (error) {
+      this.logger.warn(
+        `Shopping XML gallery ${listingId} failed: ${error instanceof Error ? error.message : error}`,
+      );
+      return { showcase: [], variation: [] };
+    }
+  }
+
+  private async tradingGallery(
+    accessToken: string,
+    listingId: string,
+  ): Promise<{ showcase: string[]; variation: string[] }> {
+    const xml = await this.trading(
+      accessToken,
+      'GetItem',
+      `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_GB</ErrorLanguage>
+  <DetailLevel>ReturnAll</DetailLevel>
+  <ItemID>${listingId}</ItemID>
+  <IncludeItemSpecifics>true</IncludeItemSpecifics>
+</GetItemRequest>`,
+    );
+    if (this.isIafExpiredXml(xml) || this.xmlTag(xml, 'Ack') === 'Failure') {
+      throw new Error(this.xmlTag(xml, 'LongMessage') || 'Trading GetItem gallery failed');
+    }
+    return this.splitGalleryXml(this.xmlBlocks(xml, 'Item')[0] ?? xml);
+  }
+
+  private splitGalleryXml(itemXml: string): { showcase: string[]; variation: string[] } {
+    const variationsXml = itemXml.match(/<Variations\b[\s\S]*?<\/Variations>/i)?.[0] ?? '';
+    const pictureDetails = itemXml.match(/<PictureDetails\b[\s\S]*?<\/PictureDetails>/i)?.[0] ?? '';
+    const listingXml = pictureDetails || itemXml.replace(/<Variations\b[\s\S]*?<\/Variations>/i, '');
+    return {
+      showcase: this.mergeImages(this.xmlTags(listingXml, 'PictureURL'), this.xmlTags(listingXml, 'GalleryURL')),
+      variation: this.mergeImages(this.xmlTags(variationsXml, 'PictureURL')),
+    };
+  }
+
+  private async descriptionFrameImages(listingId: string): Promise<string[]> {
+    const url = `https://vi.vipr.ebaydesc.com/ws/eBayISAPI.dll?ViewItemDescV4&item=${encodeURIComponent(listingId)}&t=0&tid=0&l=1&domain=ebay.co.uk`;
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+          Accept: 'text/html',
+          'Accept-Language': 'en-GB,en;q=0.9',
+        },
+      });
+      if (!response.ok) return [];
+      return this.imagesFromHtml(await response.text());
+    } catch (error) {
+      this.logger.warn(
+        `Description images ${listingId} failed: ${error instanceof Error ? error.message : error}`,
+      );
+      return [];
+    }
+  }
+
+  private async enrichFromListingPage(detail: EbayItemDetail): Promise<EbayItemDetail> {
+    const listingId = detail.legacyItemId || this.numericItemId(detail.itemId);
+    const urls = [
+      detail.itemUrl,
+      listingId ? `https://www.ebay.co.uk/itm/${listingId}` : null,
+      listingId ? `https://m.ebay.co.uk/itm/${listingId}` : null,
+    ].filter((url, index, all): url is string => Boolean(url) && all.indexOf(url) === index);
+    for (const url of urls) {
+      try {
+        const images = await this.listingPageImages(url);
+        if (images.length <= detail.images.length) continue;
+        return { ...detail, images: this.mergeImages(images, detail.images) };
+      } catch (error) {
+        this.logger.warn(
+          `Listing page images ${url} failed: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+    return detail;
+  }
+
+  private async listingPageImages(itemUrl: string): Promise<string[]> {
+    const response = await fetch(itemUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-GB,en;q=0.9',
+      },
+      redirect: 'follow',
+    });
+    if (!response.ok) {
+      this.logger.warn(`Listing page ${itemUrl} returned ${response.status}`);
+      return [];
+    }
+    return this.imagesFromListingHtml(await response.text());
+  }
+
+  private imagesFromListingHtml(html: string): string[] {
+    const jsonLd: string[] = [];
+    for (const block of html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)) {
+      try {
+        jsonLd.push(...this.ebayImageUrlsFromUnknown(JSON.parse(block[1])));
+      } catch {
+        // Some ld+json blocks are truncated or wrapped in arrays of non-product data.
+      }
+    }
+    const fromLd = this.mergeImages(jsonLd);
+    if (fromLd.length >= 3) return fromLd;
+
+    const head = html.slice(0, 280_000);
+    const zoom: string[] = [];
+    for (const match of head.matchAll(
+      /"(?:maxImageUrl|originalImg|zoomImg|displayImageUrl|huge)"\s*:\s*"(https:\\\/\\\/i\.ebayimg\.com[^"]+|https:\/\/i\.ebayimg\.com[^"]+)"/gi,
+    )) {
+      zoom.push(match[1].replace(/\\u002F/gi, '/').replace(/\\\//g, '/'));
+    }
+    const fromZoom = this.mergeImages(fromLd, zoom);
+    if (fromZoom.length >= 3) return fromZoom;
+
+    const hashes = new Set<string>();
+    for (const match of head.matchAll(
+      /i\.ebayimg\.com\/(?:thumbs\/)?images\/g\/([^/"'\\s]+)(?:\\?\/s-l(1600|1400|1200|960))?/gi,
+    )) {
+      hashes.add(match[1].replace(/\\/g, ''));
+    }
+    return this.mergeImages(
+      fromZoom,
+      [...hashes].filter((hash) => hash.length >= 6).map((hash) => `https://i.ebayimg.com/images/g/${hash}/s-l1600.jpg`),
+    );
   }
 
   /**
@@ -1540,13 +2066,16 @@ export class EbayRestClient {
     const matched = variationId
       ? variations.find((variation) => variation.sku === variationId)
       : undefined;
+    const price = matched?.price || mapped.price;
     return {
       itemId: mapped.itemId,
       legacyItemId: mapped.itemId,
       title: mapped.title,
       subtitle: null,
-      images: mapped.images,
-      price: matched?.price || mapped.price,
+      images: this.mergeImages(mapped.images),
+      showcaseImages: mapped.images,
+      price,
+      priceMax: price,
       currency: matched?.currency || mapped.currency,
       itemUrl: mapped.itemUrl,
       purchaseHistoryUrl: this.purchaseHistoryUrl(mapped.itemId),
@@ -1599,6 +2128,7 @@ export class EbayRestClient {
         soldCount: stock.soldCount,
         specifics,
         label: specifics.map((row) => row.value).filter(Boolean).join(' / ') || sku || 'Variation',
+        imageUrl: null,
       };
     });
   }
@@ -1818,18 +2348,17 @@ export class EbayRestClient {
         soldCount: 0,
         specifics: [],
         label: offer.sku || 'Variation',
+        imageUrl: null,
       }));
     }
     const quantity = variations.length
       ? variations.reduce((sum, variation) => sum + variation.quantity, 0)
       : offers.reduce((sum, offer) => sum + offer.quantity, 0);
-    const priced = variations.find((variation) => variation.price > 0) ?? offers.find((offer) => offer.price > 0);
-    return {
+    return this.withPriceRange({
       ...detail,
       variations,
       availableQuantity: quantity,
-      price: priced?.price || detail.price,
-    };
+    });
   }
 
   private async trading(accessToken: string, callName: string, body: string): Promise<string> {
@@ -1895,9 +2424,11 @@ export class EbayRestClient {
     const priceMatch = block.match(/<CurrentPrice([^>]*)>([^<]+)<\/CurrentPrice>/);
     const currency = priceMatch?.[1]?.match(/currencyID="([^"]+)"/)?.[1] ?? this.currency();
     const price = Number(priceMatch?.[2] ?? this.xmlTag(block, 'CurrentPrice') ?? 0);
+    const pictureDetails = block.match(/<PictureDetails\b[\s\S]*?<\/PictureDetails>/i)?.[0] ?? '';
+    const galleryXml = pictureDetails || block.replace(/<Variations\b[\s\S]*?<\/Variations>/i, '');
     const pictures = [
-      ...this.xmlTags(block, 'PictureURL'),
-      ...this.xmlTags(block, 'GalleryURL'),
+      ...this.xmlTags(galleryXml, 'PictureURL'),
+      ...this.xmlTags(galleryXml, 'GalleryURL'),
     ].filter((url, index, all) => url.startsWith('http') && all.indexOf(url) === index);
     const stock = this.tradingRemainingQuantity(block);
 
@@ -1905,7 +2436,7 @@ export class EbayRestClient {
       itemId,
       title,
       description: this.xmlTag(block, 'Description').slice(0, 8000),
-      images: pictures.slice(0, 12),
+      images: this.mergeImages(pictures),
       price: Number.isFinite(price) ? price : 0,
       currency,
       quantity: stock.quantity,
@@ -1984,16 +2515,22 @@ export class EbayRestClient {
     accessToken: string,
     body?: unknown,
   ): Promise<T> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Content-Language': 'en-GB',
+      'Accept-Language': 'en-GB',
+      'X-EBAY-C-MARKETPLACE-ID': this.config().marketplaceId,
+      Accept: 'application/json',
+    };
+    if (url.includes('/buy/browse/')) {
+      const country = this.config().marketplaceId === 'EBAY_GB' ? 'GB' : 'US';
+      const zip = country === 'GB' ? 'SW1A1AA' : '10001';
+      headers['X-EBAY-C-ENDUSERCTX'] = `contextualLocation=country=${country},zip=${zip}`;
+    }
     const response = await fetch(url, {
       method,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Content-Language': 'en-GB',
-        'Accept-Language': 'en-GB',
-        'X-EBAY-C-MARKETPLACE-ID': this.config().marketplaceId,
-        Accept: 'application/json',
-      },
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
 

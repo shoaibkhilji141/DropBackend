@@ -490,6 +490,7 @@ export class SheetMonitoringService {
               soldCount: 0,
               specifics: [],
               label: snapshot.label,
+              imageUrl: null,
             }));
     const variations = ebayVariations.length
       ? matchEbayToSupplier(ebayVariations, live.variants, live.shippingCost, previousSnapshots)

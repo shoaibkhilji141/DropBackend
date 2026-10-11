@@ -403,10 +403,12 @@ class ListingSeoResultDto {
     highlights;
     keywords;
     aspects;
+    mainImagePrompt;
+    imageNotes;
     model;
     tokensUsed;
     static _OPENAPI_METADATA_FACTORY() {
-        return { title: { required: true, type: () => String }, descriptionHtml: { required: true, type: () => String }, highlights: { required: true, type: () => [String] }, keywords: { required: true, type: () => [String] }, aspects: { required: true, type: () => [require("./ai.dto").ListingSeoAspectDto] }, model: { required: true, type: () => String }, tokensUsed: { required: true, type: () => Number } };
+        return { title: { required: true, type: () => String }, descriptionHtml: { required: true, type: () => String }, highlights: { required: true, type: () => [String] }, keywords: { required: true, type: () => [String] }, aspects: { required: true, type: () => [require("./ai.dto").ListingSeoAspectDto] }, mainImagePrompt: { required: false, type: () => String }, imageNotes: { required: false, type: () => [String] }, model: { required: true, type: () => String }, tokensUsed: { required: true, type: () => Number } };
     }
 }
 exports.ListingSeoResultDto = ListingSeoResultDto;
@@ -430,6 +432,14 @@ __decorate([
     (0, swagger_1.ApiProperty)({ type: [ListingSeoAspectDto] }),
     __metadata("design:type", Array)
 ], ListingSeoResultDto.prototype, "aspects", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ description: 'Ready-to-paste prompt for an image AI, using the product photo as reference' }),
+    __metadata("design:type", String)
+], ListingSeoResultDto.prototype, "mainImagePrompt", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: [String] }),
+    __metadata("design:type", Array)
+], ListingSeoResultDto.prototype, "imageNotes", void 0);
 __decorate([
     (0, swagger_1.ApiProperty)(),
     __metadata("design:type", String)

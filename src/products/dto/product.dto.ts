@@ -349,3 +349,15 @@ export class OptimizeEbayListingDto {
   @MaxLength(500)
   url!: string;
 }
+
+export class CompareEbayListingsDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  yours!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  competitor!: string;
+}

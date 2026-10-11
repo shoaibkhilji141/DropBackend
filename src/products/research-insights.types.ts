@@ -91,6 +91,8 @@ export interface SeoRecommendationView {
   checklist: SeoChecklistItem[];
   aiGenerated: boolean;
   note: string;
+  mainImagePrompt?: string;
+  imageNotes?: string[];
 }
 
 export type DiagnosisPriority = 'critical' | 'high' | 'medium';
@@ -110,6 +112,18 @@ export interface SalesDiagnosisView {
   items: SalesDiagnosisItem[];
 }
 
+export interface ImageReviewView {
+  count: number;
+  showcaseCount: number;
+  variationCount: number;
+  referenceImageUrl: string | null;
+  summary: string;
+  issues: string[];
+  strengths: string[];
+  mainImagePrompt: string;
+  howToUse: string;
+}
+
 export interface EbayItemInsightView {
   item: EbayItemDetail;
   marketplace: string;
@@ -120,6 +134,33 @@ export interface EbayItemInsightView {
   seo: SeoRecommendationView;
   competitors: EbayMarketplaceItem[];
   diagnosis: SalesDiagnosisView;
+  imageReview: ImageReviewView;
+}
+
+export type CompareVerdict = 'ahead' | 'behind' | 'same';
+
+export interface ListingCompareRow {
+  id: string;
+  title: string;
+  yours: string;
+  competitor: string;
+  verdict: CompareVerdict;
+  note: string;
+}
+
+export interface ListingCompareConclusion {
+  summary: string;
+  firstMove: string;
+  actions: string[];
+  aiGenerated: boolean;
+}
+
+export interface ListingCompareView {
+  yours: EbayItemDetail;
+  competitor: EbayItemDetail;
+  marketplace: string;
+  diffs: ListingCompareRow[];
+  conclusion: ListingCompareConclusion;
 }
 
 export interface AliExpressInsightView {

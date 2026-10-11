@@ -3,6 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthenticatedUser } from '../auth/jwt.strategy';
 import {
+  CompareEbayListingsDto,
   ListOnEbayDto,
   MatchAliExpressQueryDto,
   OptimizeEbayListingDto,
@@ -48,6 +49,14 @@ export class ResearchController {
   })
   optimizeEbayListing(@Body() dto: OptimizeEbayListingDto) {
     return this.insights.optimizeListing(dto.url);
+  }
+
+  @Post('ebay/compare')
+  @ApiOperation({
+    summary: 'Compare your eBay listing with a competitor that already has sales',
+  })
+  compareEbayListings(@Body() dto: CompareEbayListingsDto) {
+    return this.insights.compareListings(dto.yours, dto.competitor);
   }
 
   @Get('aliexpress/insight')

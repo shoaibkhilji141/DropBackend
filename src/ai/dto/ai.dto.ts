@@ -138,6 +138,9 @@ export class ListingSeoResultDto {
   @ApiProperty({ type: [String] }) highlights: string[];
   @ApiProperty({ type: [String] }) keywords: string[];
   @ApiProperty({ type: [ListingSeoAspectDto] }) aspects: ListingSeoAspectDto[];
+  @ApiPropertyOptional({ description: 'Ready-to-paste prompt for an image AI, using the product photo as reference' })
+  mainImagePrompt?: string;
+  @ApiPropertyOptional({ type: [String] }) imageNotes?: string[];
   @ApiProperty() model: string;
   @ApiProperty() tokensUsed: number;
 }

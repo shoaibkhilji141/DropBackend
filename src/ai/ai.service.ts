@@ -182,12 +182,14 @@ export class AiService {
     };
 
     const result = await this.runText(AIRequestType.TITLE, dto, {
-      system: `${SELLER_VOICE} You are optimising a listing for eBay UK Best Match (ebay.co.uk). Goal is sales, not views: the right buyers must find, trust and buy. Use British English (colour, metre, aluminium) and GBP. Return JSON {"title":"...","descriptionHtml":"...","highlights":["..."],"keywords":["..."],"aspects":[{"name":"...","value":"..."}]}.
+      system: `${SELLER_VOICE} You are optimising a listing for eBay UK Best Match (ebay.co.uk). Goal is sales, not views: the right buyers must find, trust and buy. Use British English (colour, metre, aluminium) and GBP. Return JSON {"title":"...","descriptionHtml":"...","highlights":["..."],"keywords":["..."],"aspects":[{"name":"...","value":"..."}],"mainImagePrompt":"...","imageNotes":["..."]}.
 title: at most 80 characters and use as much of that budget as possible without stuffing. Lead with the exact phrase buyers search, then type, then size/colour/qty/compatibility. No ALL CAPS, no punctuation runs, no slogans.
 descriptionHtml: simple HTML only <p>, <h3>, <ul>, <li>, <strong>. Open with two sentences on the buyer outcome that address the listed drawbacks, then a <ul> of specifics, then a short UK postage/returns paragraph with no promised delivery date. Repeat the main keyword naturally two or three times.
 highlights: 4 to 6 lines under 90 characters that reduce purchase uncertainty.
 keywords: 10 to 14 search phrases ordered by commercial value.
 aspects: item specifics. Use requested names exactly. Omit rather than guess.
+mainImagePrompt: a complete prompt the seller pastes into ChatGPT, Gemini or Midjourney together with the current product photo as the only reference. The output must be one eBay UK main gallery image: square, 1600px, clean light background, product filling most of the frame, true colour and shape, no text, badges, watermarks, props that hide the item, or a different product.
+imageNotes: 3 to 5 short notes on what is weak about typical supplier photos for this product and what the main image must show.
 Never invent brands, certifications, warranties or measurements absent from the source.`,
       user: [
         'Write an SEO-optimised eBay UK listing for this product.',
@@ -225,9 +227,51 @@ Never invent brands, certifications, warranties or measurements absent from the 
       highlights: this.stringList(payload, 'highlights').slice(0, 8),
       keywords: this.stringList(payload, 'keywords').slice(0, 16),
       aspects: this.aspectList(payload),
+      mainImagePrompt: this.optionalString(payload, 'mainImagePrompt'),
+      imageNotes: this.stringList(payload, 'imageNotes').slice(0, 6),
       model: result.model,
       tokensUsed: result.tokensUsed,
     };
+  }
+
+  async generateListingCompare(input: {
+    yoursTitle: string;
+    competitorTitle: string;
+    yoursSold: number;
+    competitorSold: number;
+    diffs: string[];
+  }): Promise<{ summary: string; firstMove: string; actions: string[] }> {
+    const dto: GenerateAiContentDto = {
+      productTitle: input.yoursTitle,
+      description: input.diffs.join('\n'),
+      tone: 'Sales',
+    };
+    const result = await this.runText(AIRequestType.TITLE, dto, {
+      system: `${SELLER_VOICE} Compare two eBay UK listings. Goal is sales on ebay.co.uk. Use British English. Return JSON {"summary":"...","firstMove":"...","actions":["..."]}.
+summary: 2-3 sentences on why the competitor is getting sales and what is different.
+firstMove: one concrete change to make first.
+actions: 4 to 6 short, specific changes. No invented facts.`,
+      user: [
+        `Your listing: ${input.yoursTitle} (${input.yoursSold} sold)`,
+        `Competitor listing: ${input.competitorTitle} (${input.competitorSold} sold)`,
+        'Measured differences:',
+        ...input.diffs,
+      ].join('\n'),
+      extract: (payload) => JSON.stringify(payload),
+    });
+    const payload = this.openai.parseJsonObject(result.content);
+    return {
+      summary: this.openai.requireString(payload, 'summary'),
+      firstMove: this.openai.requireString(payload, 'firstMove'),
+      actions: this.stringList(payload, 'actions').slice(0, 8),
+    };
+  }
+
+  private optionalString(payload: Record<string, unknown>, key: string): string | undefined {
+    const value = payload[key];
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : undefined;
   }
 
   private aspectList(payload: Record<string, unknown>): { name: string; value: string }[] {

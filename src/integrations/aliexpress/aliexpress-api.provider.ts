@@ -125,16 +125,21 @@ export class AliExpressApiProvider implements SupplierProductProvider {
     return this.client.listOrders(token);
   }
 
-  async getByExternalId(externalId: string): Promise<SupplierProduct | null> {
+  async getByExternalId(
+    externalId: string,
+    options?: { includeFreight?: boolean },
+  ): Promise<SupplierProduct | null> {
     const token = await this.requireToken();
     const product = await this.client.getProduct(token, externalId);
     if (!product) return null;
+    if (options?.includeFreight === false) return product;
     try {
       const freight = await this.client.getFreight(token, externalId);
       if (freight.length > 0) {
+        const cheapest = [...freight].sort((left, right) => left.cost - right.cost)[0];
         product.shippingOptions = freight;
-        product.shippingCost = freight[0].cost;
-        product.shippingEtaDays = freight[0].etaDaysMax;
+        product.shippingCost = cheapest.cost;
+        product.shippingEtaDays = cheapest.etaDaysMax;
       }
     } catch (error) {
       this.logger.warn(

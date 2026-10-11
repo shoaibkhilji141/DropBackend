@@ -127,12 +127,13 @@ export class EbayService {
     return this.getStatus(await this.accounts.find(userId, Platform.EBAY).then((row) => this.accounts.toPublic(row)));
   }
 
-  async accessToken(userId: string): Promise<string> {
+  async accessToken(userId: string, forceRefresh = false): Promise<string> {
     const account = await this.accounts.find(userId, Platform.EBAY);
     if (!account?.accessToken || account.status !== LinkStatus.CONNECTED) {
       throw new BadRequestException('eBay is not connected. Authorize the seller account first.');
     }
-    if (this.accounts.isExpired(account) && account.refreshToken) {
+    const needsRefresh = forceRefresh || this.accounts.isExpired(account);
+    if (needsRefresh && account.refreshToken) {
       try {
         const refreshed = await this.client.refresh(account.refreshToken);
         await this.accounts.upsertTokens(userId, Platform.EBAY, {
@@ -150,6 +151,27 @@ export class EbayService {
       throw new BadRequestException('eBay access expired. Reconnect the seller account.');
     }
     return account.accessToken;
+  }
+
+  /** Current user's token, or any connected seller account if this login has none. */
+  async resolveSellerToken(preferredUserId: string, forceRefresh = false): Promise<string | null> {
+    try {
+      return await this.accessToken(preferredUserId, forceRefresh);
+    } catch (error) {
+      this.logger.warn(
+        `eBay token for user ${preferredUserId} unavailable: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    const connected = await this.accounts.findConnected(Platform.EBAY);
+    if (!connected?.accessToken || connected.userId === preferredUserId) return null;
+    try {
+      return await this.accessToken(connected.userId, forceRefresh);
+    } catch (error) {
+      this.logger.warn(
+        `Connected eBay token unavailable: ${error instanceof Error ? error.message : error}`,
+      );
+      return null;
+    }
   }
 
   async searchMarketplace(

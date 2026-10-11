@@ -7,6 +7,7 @@ import {
   IsEnum,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -340,4 +341,11 @@ export class SearchEbayResearchDto {
   @Min(1)
   @Max(200)
   page?: number;
+}
+
+export class OptimizeEbayListingDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  url!: string;
 }

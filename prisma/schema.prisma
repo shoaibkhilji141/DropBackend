@@ -24,6 +24,7 @@ model User {
   aiRequests           AIRequest[]
   alerts               Alert[]
   integrationAccounts  IntegrationAccount[]
+  googleSheetSources   GoogleSheetSource[]
 }
 
 /// A marketplace account the seller sells through (currently eBay only).
@@ -103,6 +104,7 @@ model Product {
   profitRecords   ProfitRecord[]
   alerts          Alert[]
   orderItems      OrderItem[]
+  sheetRows       GoogleSheetRow[]
 
   @@index([userId])
   @@index([status])
@@ -167,6 +169,7 @@ model Listing {
   store   Store?  @relation(fields: [storeId], references: [id], onDelete: SetNull)
 
   orderItems OrderItem[]
+  sheetRows  GoogleSheetRow[]
 
   @@index([productId])
   @@index([status])
@@ -291,6 +294,57 @@ model MonitoringRule {
 
   @@index([productId, type])
   @@index([enabled, nextRunAt])
+}
+
+/// A Google Sheet of AliExpress supplier + eBay listing pairs used as a
+/// monitoring source. Column B/C are often "Open" hyperlinks — the real URLs
+/// are read from the exported workbook, not the visible cell text.
+model GoogleSheetSource {
+  id              String    @id @default(cuid())
+  userId          String
+  spreadsheetUrl  String
+  spreadsheetId   String
+  worksheetName   String    @default("Product to Upload")
+  supplierColumn  Int       @default(2)
+  ebayColumn      Int       @default(3)
+  titleColumn     Int       @default(4)
+  lastSyncedAt    DateTime?
+  lastError       String?
+  lastStatus      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rows GoogleSheetRow[]
+
+  @@unique([userId])
+}
+
+model GoogleSheetRow {
+  id            String   @id @default(cuid())
+  sourceId      String
+  sheetRow      Int
+  title         String?
+  supplierUrl   String
+  ebayUrl       String
+  supplierId    String?
+  ebayItemId    String?
+  productId     String?
+  listingId     String?
+  status        String   @default("PENDING")
+  lastError     String?
+  /// JSON snapshot of eBay-listed variations matched to AliExpress SKUs.
+  variationJson String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  source  GoogleSheetSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  product Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)
+  listing Listing?          @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  @@unique([sourceId, sheetRow])
+  @@index([productId])
+  @@index([listingId])
 }
 
 // ---------------------------------------------------------------------------

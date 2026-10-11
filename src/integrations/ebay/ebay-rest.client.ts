@@ -32,6 +32,29 @@ const EBAY_SCOPES = [
 /** Browse's bulk item endpoint accepts at most 20 item ids per request. */
 const BULK_ITEM_LIMIT = 20;
 
+export class EbayAuthExpiredError extends Error {
+  readonly code = 'EBAY_IAF_EXPIRED';
+
+  constructor(message = 'IAF token supplied is expired') {
+    super(message);
+    this.name = 'EbayAuthExpiredError';
+  }
+}
+
+export function isEbayAuthExpired(error: unknown): boolean {
+  return (
+    error instanceof EbayAuthExpiredError ||
+    (error instanceof Error && /IAF token supplied is expired/i.test(error.message))
+  );
+}
+
+export interface EbayOfferStock {
+  itemId: string;
+  sku: string;
+  quantity: number;
+  price: number;
+}
+
 export interface EbayResearchQuery {
   q?: string;
   categoryId?: string;
@@ -83,6 +106,16 @@ export interface EbayCategoryAspect {
 }
 
 /** Everything the research detail page needs about one live eBay listing. */
+export interface EbayItemVariation {
+  sku: string | null;
+  price: number;
+  currency: string;
+  quantity: number;
+  soldCount: number;
+  specifics: { name: string; value: string }[];
+  label: string;
+}
+
 export interface EbayItemDetail {
   itemId: string;
   legacyItemId: string | null;
@@ -113,6 +146,7 @@ export interface EbayItemDetail {
   returnsAccepted: boolean | null;
   listingStartedAt: string | null;
   listingAgeDays: number | null;
+  variations: EbayItemVariation[];
 }
 
 interface BrowseItemPayload {
@@ -128,6 +162,7 @@ interface BrowseItemDetailPayload extends BrowseItemPayload {
   shortDescription?: string;
   description?: string;
   price?: { value?: string; currency?: string };
+  currentBidPrice?: { value?: string; currency?: string };
   image?: { imageUrl?: string };
   additionalImages?: { imageUrl?: string }[];
   itemWebUrl?: string;
@@ -152,7 +187,12 @@ interface BrowseItemDetailPayload extends BrowseItemPayload {
   estimatedAvailabilities?: {
     estimatedSoldQuantity?: number;
     estimatedAvailableQuantity?: number;
+    availabilityThreshold?: number;
+    availabilityThresholdType?: string;
   }[];
+  itemGroupId?: string;
+  itemGroupType?: string;
+  itemGroupHref?: string;
 }
 
 @Injectable()
@@ -550,17 +590,133 @@ export class EbayRestClient {
    * Full detail for one listing. Browse keyed on the RESTful `v1|...|0` id, or
    * on the legacy numeric id when the caller only has an eBay item number.
    */
-  async getItemDetail(itemId: string): Promise<EbayItemDetail> {
-    const token = await this.applicationToken();
-    const numeric = this.numericItemId(itemId);
-    const url =
-      itemId.startsWith('v1|')
+  async getItemDetail(
+    itemId: string,
+    options?: { variationId?: string | null; sellerToken?: string | null },
+  ): Promise<EbayItemDetail> {
+    let browse: EbayItemDetail | null = null;
+    try {
+      const token = await this.applicationToken();
+      const numeric = this.numericItemId(itemId);
+      const params = new URLSearchParams(
+        itemId.startsWith('v1|')
+          ? {}
+          : { legacy_item_id: numeric || itemId },
+      );
+      if (options?.variationId && !itemId.startsWith('v1|')) {
+        params.set('legacy_variation_id', options.variationId);
+      }
+      const url = itemId.startsWith('v1|')
         ? `${this.hosts().api}/buy/browse/v1/item/${encodeURIComponent(itemId)}`
-        : `${this.hosts().api}/buy/browse/v1/item/get_item_by_legacy_id?${new URLSearchParams({
-            legacy_item_id: numeric || itemId,
-          }).toString()}`;
-    const payload = await this.request<BrowseItemDetailPayload>('GET', url, token);
-    return this.mapItemDetail(payload, itemId);
+        : `${this.hosts().api}/buy/browse/v1/item/get_item_by_legacy_id?${params.toString()}`;
+      const payload = await this.request<BrowseItemDetailPayload>('GET', url, token);
+      browse = this.mapItemDetail(payload, itemId);
+      const variations = await this.browseVariations(payload, itemId);
+      if (variations.length) {
+        browse = {
+          ...browse,
+          variations,
+          availableQuantity: variations.reduce((sum, variation) => sum + variation.quantity, 0),
+          price: this.pickBrowseVariationPrice(browse.price, variations, options?.variationId),
+        };
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Browse item ${itemId} failed: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
+    if (options?.sellerToken) {
+      try {
+        const trading = await this.getItemFromTrading(
+          options.sellerToken,
+          itemId,
+          options.variationId,
+        );
+        if (browse && (browse.price > 0 || browse.variations.length)) {
+          return {
+            ...browse,
+            availableQuantity: trading.variations.length
+              ? trading.availableQuantity
+              : browse.availableQuantity ?? trading.availableQuantity,
+            soldCount: trading.soldCount || browse.soldCount,
+            price: browse.price > 0 ? browse.price : trading.price,
+            variations: trading.variations.length ? trading.variations : browse.variations,
+          };
+        }
+        return trading;
+      } catch (error) {
+        this.logger.warn(
+          `Trading GetItem ${itemId} failed: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+
+    if (browse && (browse.price > 0 || browse.variations.length > 0)) return browse;
+    throw new Error(`Could not read eBay listing ${itemId}`);
+  }
+
+  private pickBrowseVariationPrice(
+    fallback: number,
+    variations: EbayItemVariation[],
+    variationId?: string | null,
+  ): number {
+    if (variationId) {
+      const match = variations.find((variation) => variation.sku === variationId);
+      if (match && match.price > 0) return match.price;
+    }
+    return variations.find((variation) => variation.price > 0)?.price || fallback;
+  }
+
+  private async browseVariations(
+    payload: BrowseItemDetailPayload,
+    itemId: string,
+  ): Promise<EbayItemVariation[]> {
+    const groupId =
+      (typeof payload.itemGroupId === 'string' && payload.itemGroupId) ||
+      this.groupIdFromHref(payload.itemGroupHref) ||
+      (payload.itemGroupType ? this.numericItemId(String(payload.legacyItemId ?? itemId)) || itemId : null);
+    if (!groupId) return [];
+    try {
+      const token = await this.applicationToken();
+      const data = await this.request<{ items?: BrowseItemDetailPayload[] }>(
+        'GET',
+        `${this.hosts().api}/buy/browse/v1/item/get_items_by_item_group?item_group_id=${encodeURIComponent(groupId)}`,
+        token,
+      );
+      return (data.items ?? []).map((item) => this.mapBrowseVariation(item)).filter((row) => row.label || row.price > 0);
+    } catch (error) {
+      this.logger.warn(
+        `Browse item group ${groupId} failed: ${error instanceof Error ? error.message : error}`,
+      );
+      return [];
+    }
+  }
+
+  private groupIdFromHref(href?: string): string | null {
+    if (!href) return null;
+    return href.match(/item_group_id=([^&]+)/i)?.[1] ?? href.match(/item_group\/([^/?]+)/i)?.[1] ?? null;
+  }
+
+  private mapBrowseVariation(item: BrowseItemDetailPayload): EbayItemVariation {
+    const specifics = (item.localizedAspects ?? [])
+      .map((aspect) => ({ name: String(aspect.name ?? ''), value: String(aspect.value ?? '') }))
+      .filter((row) => row.name && row.value);
+    const availability = item.estimatedAvailabilities?.[0];
+    const itemId = String(item.itemId ?? '');
+    const parts = itemId.split('|');
+    const sku = parts.length >= 3 && parts[2] && parts[2] !== '0' ? parts[2] : null;
+    const quantityRaw = availability?.estimatedAvailableQuantity;
+    return {
+      sku,
+      price: Number(item.price?.value ?? item.currentBidPrice?.value ?? 0) || 0,
+      currency: item.price?.currency ?? this.currency(),
+      quantity:
+        quantityRaw != null && Number.isFinite(Number(quantityRaw)) ? Math.max(0, Number(quantityRaw)) : 0,
+      soldCount: Math.max(0, Number(availability?.estimatedSoldQuantity ?? 0) || 0),
+      specifics,
+      label: specifics.map((row) => row.value).filter(Boolean).join(' / ') || sku || 'Variation',
+    };
   }
 
   private mapItemDetail(payload: BrowseItemDetailPayload, requestedId: string): EbayItemDetail {
@@ -584,7 +740,7 @@ export class EbayRestClient {
       title: String(payload.title ?? 'eBay item'),
       subtitle: payload.subtitle ?? null,
       images: [...new Set(images)],
-      price: Number(payload.price?.value ?? 0),
+      price: Number(payload.price?.value ?? payload.currentBidPrice?.value ?? 0),
       currency: payload.price?.currency ?? this.currency(),
       itemUrl: String(payload.itemWebUrl ?? (legacyItemId ? this.itemUrl(legacyItemId) : '') ?? ''),
       purchaseHistoryUrl: this.purchaseHistoryUrl(legacyItemId ?? itemId),
@@ -619,6 +775,7 @@ export class EbayRestClient {
       returnsAccepted: payload.returnTerms?.returnsAccepted ?? null,
       listingStartedAt: start?.toISOString() ?? null,
       listingAgeDays: age,
+      variations: [],
     };
   }
 
@@ -836,6 +993,17 @@ export class EbayRestClient {
     };
     const host = hosts[this.config().marketplaceId] ?? 'https://www.ebay.com';
     return `${host}/bin/purchaseHistory?item=${legacy}`;
+  }
+
+  listingIdFromInput(input: string): string | null {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+    if (/^v1\|\d+\|/i.test(trimmed)) return trimmed;
+    if (/^\d{8,16}$/.test(trimmed)) return trimmed;
+    const itm = trimmed.match(/\/itm\/(?:[^/?]+\/)?(\d{8,16})/i);
+    if (itm) return itm[1];
+    const query = trimmed.match(/[?&](?:item|itm|legacyItemId)=(\d{8,16})/i);
+    return query?.[1] ?? null;
   }
 
   private numericItemId(itemId: string): string {
@@ -1340,6 +1508,147 @@ export class EbayRestClient {
     );
   }
 
+  private async getItemFromTrading(
+    accessToken: string,
+    itemId: string,
+    variationId?: string | null,
+  ): Promise<EbayItemDetail> {
+    const numeric = this.numericItemId(itemId) || itemId;
+    const xml = await this.trading(
+      accessToken,
+      'GetItem',
+      `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <DetailLevel>ReturnAll</DetailLevel>
+  <ItemID>${numeric}</ItemID>
+  <IncludeItemSpecifics>true</IncludeItemSpecifics>
+</GetItemRequest>`,
+    );
+    if (this.isIafExpiredXml(xml)) throw new EbayAuthExpiredError();
+    const ack = this.xmlTag(xml, 'Ack');
+    if (ack === 'Failure') {
+      if (this.isIafExpiredXml(xml)) throw new EbayAuthExpiredError();
+      throw new Error(this.xmlTag(xml, 'LongMessage') || this.xmlTag(xml, 'ShortMessage') || `eBay GetItem failed for ${numeric}`);
+    }
+    const itemXml = this.xmlBlocks(xml, 'Item')[0] ?? xml;
+    const mapped = this.mapSellerItem(itemXml);
+    if (!mapped) throw new Error(`eBay GetItem returned no item for ${numeric}`);
+    const variations = this.parseTradingVariations(itemXml);
+    const stock = this.tradingRemainingQuantity(itemXml, variationId, variations);
+    const matched = variationId
+      ? variations.find((variation) => variation.sku === variationId)
+      : undefined;
+    return {
+      itemId: mapped.itemId,
+      legacyItemId: mapped.itemId,
+      title: mapped.title,
+      subtitle: null,
+      images: mapped.images,
+      price: matched?.price || mapped.price,
+      currency: matched?.currency || mapped.currency,
+      itemUrl: mapped.itemUrl,
+      purchaseHistoryUrl: this.purchaseHistoryUrl(mapped.itemId),
+      condition: null,
+      sellerUsername: null,
+      sellerFeedbackPercentage: null,
+      sellerFeedbackScore: null,
+      topRatedSeller: false,
+      categoryId: null,
+      categoryPath: mapped.category ? [mapped.category] : [],
+      brand: null,
+      mpn: null,
+      aspects: [],
+      descriptionHtml: mapped.description,
+      shortDescription: null,
+      soldCount: stock.soldCount,
+      availableQuantity: stock.quantity,
+      shippingCost: null,
+      shippingService: null,
+      itemLocation: null,
+      returnsAccepted: null,
+      listingStartedAt: null,
+      listingAgeDays: null,
+      variations,
+    };
+  }
+
+  private parseTradingVariations(itemXml: string): EbayItemVariation[] {
+    const variationsXml = itemXml.match(/<Variations\b[\s\S]*?<\/Variations>/i)?.[0] ?? '';
+    if (!variationsXml) return [];
+    return this.xmlBlocks(variationsXml, 'Variation').map((block) => {
+      const sku = this.xmlTag(block, 'SKU') || null;
+      const stock = this.quantityFromTradingBlock(block, 'variation');
+      const priceMatch =
+        block.match(/<StartPrice([^>]*)>([^<]+)<\/StartPrice>/) ??
+        block.match(/<CurrentPrice([^>]*)>([^<]+)<\/CurrentPrice>/);
+      const currency = priceMatch?.[1]?.match(/currencyID="([^"]+)"/)?.[1] ?? this.currency();
+      const price = Number(priceMatch?.[2] ?? 0);
+      const specifics = this.xmlBlocks(block, 'NameValueList')
+        .map((pair) => ({
+          name: this.xmlTag(pair, 'Name'),
+          value: this.xmlTag(pair, 'Value'),
+        }))
+        .filter((row) => row.name && row.value);
+      return {
+        sku,
+        price: Number.isFinite(price) ? price : 0,
+        currency,
+        quantity: stock.quantity,
+        soldCount: stock.soldCount,
+        specifics,
+        label: specifics.map((row) => row.value).filter(Boolean).join(' / ') || sku || 'Variation',
+      };
+    });
+  }
+
+  /** Remaining stock from seller Trading XML — never Browse's buyer-facing estimate. */
+  private tradingRemainingQuantity(
+    itemXml: string,
+    variationId?: string | null,
+    parsed?: EbayItemVariation[],
+  ): { quantity: number; soldCount: number } {
+    const variations = parsed ?? this.parseTradingVariations(itemXml);
+    if (variationId) {
+      const match = variations.find((variation) => variation.sku === variationId);
+      if (match) return { quantity: match.quantity, soldCount: match.soldCount };
+    }
+    if (variations.length > 0) {
+      return {
+        quantity: variations.reduce((sum, variation) => sum + variation.quantity, 0),
+        soldCount: variations.reduce((sum, variation) => sum + variation.soldCount, 0),
+      };
+    }
+    return this.quantityFromTradingBlock(
+      itemXml.replace(/<Variations\b[\s\S]*?<\/Variations>/gi, ''),
+      'item',
+    );
+  }
+
+  private quantityFromTradingBlock(
+    block: string,
+    kind: 'item' | 'variation' = 'item',
+  ): { quantity: number; soldCount: number } {
+    const selling = block.match(/<SellingStatus\b[\s\S]*?<\/SellingStatus>/i)?.[0] ?? '';
+    const soldRaw = Number(this.xmlTag(selling, 'QuantitySold') || 0);
+    const soldCount = Number.isFinite(soldRaw) ? Math.max(0, soldRaw) : 0;
+    const availableRaw = this.xmlTag(block, 'QuantityAvailable');
+    if (availableRaw !== '') {
+      const available = Number(availableRaw);
+      if (Number.isFinite(available)) {
+        return { quantity: Math.max(0, available), soldCount };
+      }
+    }
+    const listed = Number(this.xmlTag(block, 'Quantity') || 0);
+    const original = Number.isFinite(listed) ? Math.max(0, listed) : 0;
+    // Item.Quantity is originally listed; Variation.Quantity is remaining.
+    if (kind === 'variation') {
+      return { quantity: original, soldCount };
+    }
+    return { quantity: Math.max(0, original - soldCount), soldCount };
+  }
+
   private async listFromTrading(accessToken: string): Promise<SellerListing[]> {
     const listings: SellerListing[] = [];
     const pageSize = 100;
@@ -1444,6 +1753,85 @@ export class EbayRestClient {
     return listings;
   }
 
+  async listOfferQuantities(accessToken: string): Promise<Map<string, EbayOfferStock[]>> {
+    const byItem = new Map<string, EbayOfferStock[]>();
+    for (let offset = 0; offset < 2000; offset += 200) {
+      const data = await this.request<{ offers?: Record<string, unknown>[] }>(
+        'GET',
+        `${this.hosts().api}/sell/inventory/v1/offer?limit=200&offset=${offset}`,
+        accessToken,
+      ).catch((error: unknown) => {
+        if (isEbayAuthExpired(error) || (error instanceof Error && /401|invalid_token|expired/i.test(error.message))) {
+          throw new EbayAuthExpiredError(error instanceof Error ? error.message : 'eBay offer token expired');
+        }
+        this.logger.warn(
+          `Sell Inventory offers unavailable: ${error instanceof Error ? error.message : error}`,
+        );
+        return { offers: [] as Record<string, unknown>[] };
+      });
+      const rows = data.offers ?? [];
+      for (const offer of rows) {
+        const listing = (offer.listing as { listingId?: string; listingStatus?: string } | undefined) ?? {};
+        const itemId = String(listing.listingId ?? offer.listingId ?? '');
+        const status = String(listing.listingStatus ?? offer.status ?? 'PUBLISHED');
+        if (!itemId || /UNPUBLISHED|ENDED|WITHDRAWN|INACTIVE/i.test(status)) continue;
+        const sku = String(offer.sku ?? '');
+        const price = Number(
+          (offer.pricingSummary as { price?: { value?: string } } | undefined)?.price?.value ?? 0,
+        );
+        const quantity = Number(offer.availableQuantity ?? 0);
+        const row: EbayOfferStock = {
+          itemId,
+          sku,
+          quantity: Number.isFinite(quantity) ? Math.max(0, quantity) : 0,
+          price: Number.isFinite(price) ? price : 0,
+        };
+        const current = byItem.get(itemId) ?? [];
+        current.push(row);
+        byItem.set(itemId, current);
+      }
+      if (rows.length < 200) break;
+    }
+    return byItem;
+  }
+
+  applyOfferQuantities(detail: EbayItemDetail, offers: EbayOfferStock[]): EbayItemDetail {
+    if (!offers.length) return detail;
+    const bySku = new Map(offers.filter((offer) => offer.sku).map((offer) => [offer.sku, offer]));
+    let variations = detail.variations ?? [];
+    if (variations.length) {
+      variations = variations.map((variation) => {
+        const offer = variation.sku ? bySku.get(variation.sku) : undefined;
+        if (!offer) return variation;
+        return {
+          ...variation,
+          quantity: offer.quantity,
+          price: offer.price > 0 ? offer.price : variation.price,
+        };
+      });
+    } else if (offers.length > 1) {
+      variations = offers.map((offer) => ({
+        sku: offer.sku || null,
+        price: offer.price,
+        currency: detail.currency,
+        quantity: offer.quantity,
+        soldCount: 0,
+        specifics: [],
+        label: offer.sku || 'Variation',
+      }));
+    }
+    const quantity = variations.length
+      ? variations.reduce((sum, variation) => sum + variation.quantity, 0)
+      : offers.reduce((sum, offer) => sum + offer.quantity, 0);
+    const priced = variations.find((variation) => variation.price > 0) ?? offers.find((offer) => offer.price > 0);
+    return {
+      ...detail,
+      variations,
+      availableQuantity: quantity,
+      price: priced?.price || detail.price,
+    };
+  }
+
   private async trading(accessToken: string, callName: string, body: string): Promise<string> {
     const response = await fetch(`${this.hosts().api}/ws/api.dll`, {
       method: 'POST',
@@ -1457,10 +1845,15 @@ export class EbayRestClient {
       body,
     });
     const xml = await response.text();
+    if (this.isIafExpiredXml(xml)) throw new EbayAuthExpiredError();
     if (!response.ok) {
       throw new Error(this.xmlTag(xml, 'LongMessage') || `eBay ${callName} failed (${response.status})`);
     }
     return xml;
+  }
+
+  private isIafExpiredXml(xml: string): boolean {
+    return /IAF token supplied is expired/i.test(xml) || /errorId["\s:>]+21917053/i.test(xml);
   }
 
   private siteId(): string {
@@ -1506,6 +1899,7 @@ export class EbayRestClient {
       ...this.xmlTags(block, 'PictureURL'),
       ...this.xmlTags(block, 'GalleryURL'),
     ].filter((url, index, all) => url.startsWith('http') && all.indexOf(url) === index);
+    const stock = this.tradingRemainingQuantity(block);
 
     return {
       itemId,
@@ -1514,8 +1908,8 @@ export class EbayRestClient {
       images: pictures.slice(0, 12),
       price: Number.isFinite(price) ? price : 0,
       currency,
-      quantity: Number(this.xmlTag(block, 'QuantityAvailable') || this.xmlTag(block, 'Quantity') || 0),
-      soldCount: Number(this.xmlTag(block, 'QuantitySold') || 0),
+      quantity: stock.quantity,
+      soldCount: stock.soldCount,
       sku: this.xmlTag(block, 'SKU') || undefined,
       category: this.xmlTag(block, 'CategoryName') || undefined,
       itemUrl: this.xmlTag(block, 'ViewItemURL') || this.itemUrl(itemId) || '',
@@ -1612,6 +2006,12 @@ export class EbayRestClient {
         payload.error_description ||
         `eBay API ${method} ${url} failed (${response.status})`;
       this.logger.warn(message);
+      if (
+        response.status === 401 ||
+        /invalid_token|token.+expired|IAF token supplied is expired/i.test(message)
+      ) {
+        throw new EbayAuthExpiredError(message);
+      }
       throw new Error(message);
     }
     return payload;

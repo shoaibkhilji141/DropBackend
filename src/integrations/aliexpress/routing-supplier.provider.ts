@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AliExpressApiProvider } from './aliexpress-api.provider';
 import {
+  SupplierLookupOptions,
   SupplierProduct,
   SupplierProductProvider,
   SupplierSearchQuery,
@@ -33,10 +34,13 @@ export class RoutingSupplierProvider implements SupplierProductProvider {
     return this.local.search(query);
   }
 
-  async getByExternalId(externalId: string): Promise<SupplierProduct | null> {
+  async getByExternalId(
+    externalId: string,
+    options?: SupplierLookupOptions,
+  ): Promise<SupplierProduct | null> {
     if (await this.live.hasLiveSession()) {
       try {
-        return await this.live.getByExternalId(externalId);
+        return await this.live.getByExternalId(externalId, options);
       } catch (error) {
         this.logger.warn(
           `Live AliExpress lookup failed for ${externalId}: ${

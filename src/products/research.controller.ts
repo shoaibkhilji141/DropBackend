@@ -5,6 +5,7 @@ import { AuthenticatedUser } from '../auth/jwt.strategy';
 import {
   ListOnEbayDto,
   MatchAliExpressQueryDto,
+  OptimizeEbayListingDto,
   SearchEbayResearchDto,
   SearchSupplierProductsDto,
 } from './dto/product.dto';
@@ -39,6 +40,14 @@ export class ResearchController {
   @ApiOperation({ summary: 'Sales, keywords and SEO insight for one eBay UK listing' })
   getEbayInsight(@Query('itemId') itemId: string) {
     return this.insights.getInsight(itemId);
+  }
+
+  @Post('ebay/optimize')
+  @ApiOperation({
+    summary: 'Analyse a public eBay listing URL against similar sold listings and draft sales copy',
+  })
+  optimizeEbayListing(@Body() dto: OptimizeEbayListingDto) {
+    return this.insights.optimizeListing(dto.url);
   }
 
   @Get('aliexpress/insight')

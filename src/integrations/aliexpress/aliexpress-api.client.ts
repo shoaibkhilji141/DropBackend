@@ -737,6 +737,7 @@ export class AliExpressApiClient {
     }));
     const costPrice = variants[0]?.costPrice || this.num(base.target_sale_price ?? base.sale_price);
     const stock = variants.reduce((sum, variant) => sum + variant.stock, 0) || this.num(base.product_stock);
+    const shippingCost = this.extractShipToUkCost(result, base);
     const id = String(base.product_id ?? fallbackId);
     const propBlock =
       (result.ae_item_properties as Record<string, unknown> | undefined) ??
@@ -755,9 +756,9 @@ export class AliExpressApiClient {
       description: htmlToPlainText(String(base.detail ?? base.mobile_detail ?? base.subject ?? '')),
       images: images.length > 0 ? images : firstImage ? [firstImage] : [],
       sourceUrl: String(base.product_detail_url ?? `https://www.aliexpress.com/item/${id}.html`),
-      currency: String(base.currency_code ?? 'GBP'),
+      currency: String(base.currency_code ?? base.target_sale_price_currency ?? 'GBP'),
       costPrice,
-      shippingCost: 0,
+      shippingCost,
       stock,
       rating: this.num(base.avg_evaluation_rating),
       reviews: this.num(base.evaluation_count),
@@ -794,6 +795,27 @@ export class AliExpressApiClient {
         trackingAvailable: Boolean(row.tracking_available ?? true),
       }))
       .filter((option) => option.method);
+  }
+
+  private extractShipToUkCost(
+    result: Record<string, unknown>,
+    base: Record<string, unknown>,
+  ): number {
+    const freight =
+      (result.ae_store_freight_info as Record<string, unknown> | undefined) ??
+      (result.logistics_info as Record<string, unknown> | undefined) ??
+      (result.delivery_info as Record<string, unknown> | undefined) ??
+      {};
+    return this.num(
+      freight.shipping_fee ??
+        freight.freight ??
+        freight.ship_to_cost ??
+        freight.shipToCost ??
+        base.ship_to_cost ??
+        base.shipToCost ??
+        base.target_original_freight ??
+        0,
+    );
   }
 
   private mapSort(sort?: string): string {

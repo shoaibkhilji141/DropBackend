@@ -171,6 +171,7 @@ export class AiService {
     requestedAspectNames: string[];
     priceHint?: number | null;
     currency?: string;
+    drawbacks?: string[];
   }): Promise<ListingSeoResultDto> {
     const dto: GenerateAiContentDto = {
       productTitle: input.sourceTitle,
@@ -181,13 +182,13 @@ export class AiService {
     };
 
     const result = await this.runText(AIRequestType.TITLE, dto, {
-      system: `${SELLER_VOICE} You are optimising a listing for eBay UK (ebay.co.uk), so use British English spelling (colour, metre, aluminium) and GBP. Return JSON {"title":"...","descriptionHtml":"...","highlights":["..."],"keywords":["..."],"aspects":[{"name":"...","value":"..."}]}.
-title: at most 80 characters and it must use as much of that budget as possible without stuffing. Lead with the exact phrase buyers search for, then the product type, then the one or two strongest differentiators (size, colour, quantity, compatibility). No ALL CAPS, no punctuation runs, no seller slogans, no quote characters.
-descriptionHtml: valid simple HTML using only <p>, <h3>, <ul>, <li> and <strong>. Open with two sentences on the buyer outcome, then a <ul> of specific features, then a short dispatch and returns paragraph that promises no specific delivery date. Repeat the main keyword naturally two or three times. No inline styles, no scripts, no tables, no images.
-highlights: 4 to 6 lines under 90 characters each.
+      system: `${SELLER_VOICE} You are optimising a listing for eBay UK Best Match (ebay.co.uk). Goal is sales, not views: the right buyers must find, trust and buy. Use British English (colour, metre, aluminium) and GBP. Return JSON {"title":"...","descriptionHtml":"...","highlights":["..."],"keywords":["..."],"aspects":[{"name":"...","value":"..."}]}.
+title: at most 80 characters and use as much of that budget as possible without stuffing. Lead with the exact phrase buyers search, then type, then size/colour/qty/compatibility. No ALL CAPS, no punctuation runs, no slogans.
+descriptionHtml: simple HTML only <p>, <h3>, <ul>, <li>, <strong>. Open with two sentences on the buyer outcome that address the listed drawbacks, then a <ul> of specifics, then a short UK postage/returns paragraph with no promised delivery date. Repeat the main keyword naturally two or three times.
+highlights: 4 to 6 lines under 90 characters that reduce purchase uncertainty.
 keywords: 10 to 14 search phrases ordered by commercial value.
-aspects: item specifics. Use every requested aspect name you can fill from the source data, keeping the requested name spelling exactly. Omit an aspect entirely rather than guessing a value.
-Never invent brands, certifications, warranties or measurements that are absent from the source.`,
+aspects: item specifics. Use requested names exactly. Omit rather than guess.
+Never invent brands, certifications, warranties or measurements absent from the source.`,
       user: [
         'Write an SEO-optimised eBay UK listing for this product.',
         `Source title: ${input.sourceTitle}`,
@@ -208,6 +209,9 @@ Never invent brands, certifications, warranties or measurements that are absent 
           ? `Item specific names eBay asks for in this category: ${input.requestedAspectNames.slice(0, 30).join(', ')}`
           : '',
         input.description ? `Source description:\n${input.description.slice(0, 3000)}` : '',
+        input.drawbacks?.length
+          ? `Fix these listing drawbacks so buyers trust and purchase:\n${input.drawbacks.join('\n')}`
+          : '',
       ]
         .filter(Boolean)
         .join('\n'),

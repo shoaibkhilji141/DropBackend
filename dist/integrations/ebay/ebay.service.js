@@ -112,12 +112,13 @@ let EbayService = EbayService_1 = class EbayService {
         });
         return this.getStatus(await this.accounts.find(userId, client_1.Platform.EBAY).then((row) => this.accounts.toPublic(row)));
     }
-    async accessToken(userId) {
+    async accessToken(userId, forceRefresh = false) {
         const account = await this.accounts.find(userId, client_1.Platform.EBAY);
         if (!account?.accessToken || account.status !== client_1.LinkStatus.CONNECTED) {
             throw new common_1.BadRequestException('eBay is not connected. Authorize the seller account first.');
         }
-        if (this.accounts.isExpired(account) && account.refreshToken) {
+        const needsRefresh = forceRefresh || this.accounts.isExpired(account);
+        if (needsRefresh && account.refreshToken) {
             try {
                 const refreshed = await this.client.refresh(account.refreshToken);
                 await this.accounts.upsertTokens(userId, client_1.Platform.EBAY, {
@@ -136,6 +137,24 @@ let EbayService = EbayService_1 = class EbayService {
             throw new common_1.BadRequestException('eBay access expired. Reconnect the seller account.');
         }
         return account.accessToken;
+    }
+    async resolveSellerToken(preferredUserId, forceRefresh = false) {
+        try {
+            return await this.accessToken(preferredUserId, forceRefresh);
+        }
+        catch (error) {
+            this.logger.warn(`eBay token for user ${preferredUserId} unavailable: ${error instanceof Error ? error.message : error}`);
+        }
+        const connected = await this.accounts.findConnected(client_1.Platform.EBAY);
+        if (!connected?.accessToken || connected.userId === preferredUserId)
+            return null;
+        try {
+            return await this.accessToken(connected.userId, forceRefresh);
+        }
+        catch (error) {
+            this.logger.warn(`Connected eBay token unavailable: ${error instanceof Error ? error.message : error}`);
+            return null;
+        }
     }
     async searchMarketplace(query) {
         const result = await this.client.searchMarketplace(query ?? {});

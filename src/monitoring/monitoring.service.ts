@@ -334,14 +334,19 @@ export class MonitoringService {
     }
   }
 
+  private readonly liveCache = new Map<string, { at: number; product: SupplierProduct }>();
+
   private async loadLiveProduct(rule: MonitoringRuleRecord): Promise<SupplierProduct> {
     if (!rule.product.externalId) {
       throw new Error(`Product ${rule.productId} has no supplier external id`);
     }
-    const live = await this.supplier.getByExternalId(rule.product.externalId);
+    const cached = this.liveCache.get(rule.product.externalId);
+    if (cached && Date.now() - cached.at < 60_000) return cached.product;
+    const live = await this.supplier.getByExternalId(rule.product.externalId, { includeFreight: false });
     if (!live) {
       throw new Error(`Supplier product ${rule.product.externalId} was not found`);
     }
+    this.liveCache.set(rule.product.externalId, { at: Date.now(), product: live });
     return live;
   }
 

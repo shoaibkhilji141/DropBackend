@@ -10,7 +10,15 @@ import {
   RunMonitoringDto,
   UpdateMonitoringRuleDto,
 } from './dto/monitoring.dto';
+import { SaveGoogleSheetDto } from './dto/sheet-monitoring.dto';
 import { MonitoringService } from './monitoring.service';
+import { SheetMonitoringService } from './sheet-monitoring.service';
+import {
+  GoogleSheetRowView,
+  GoogleSheetSourceView,
+  GoogleSheetState,
+  GoogleSheetSyncResult,
+} from './sheet-monitoring.types';
 import {
   AlertView,
   CheckResult,
@@ -26,6 +34,7 @@ import {
 export class MonitoringController {
   constructor(
     private readonly monitoringService: MonitoringService,
+    private readonly sheetMonitoring: SheetMonitoringService,
     private readonly configService: ConfigService,
     @Inject(REDIS_CLIENT) private readonly redis: RedisClientHost,
   ) {}
@@ -122,6 +131,31 @@ export class MonitoringController {
     @Body() dto: UpdateMonitoringRuleDto,
   ): Promise<MonitoringRuleView> {
     return this.monitoringService.updateRule(id, dto);
+  }
+
+  @Get('sheet')
+  sheet(): Promise<GoogleSheetState> {
+    return this.sheetMonitoring.getState();
+  }
+
+  @Post('sheet')
+  saveSheet(@Body() dto: SaveGoogleSheetDto): Promise<GoogleSheetSourceView> {
+    return this.sheetMonitoring.save(dto);
+  }
+
+  @Post('sheet/preview')
+  previewSheet(@Body() dto: SaveGoogleSheetDto): Promise<GoogleSheetRowView[]> {
+    return this.sheetMonitoring.preview(dto);
+  }
+
+  @Post('sheet/sync')
+  syncSheet(@Body() dto: SaveGoogleSheetDto): Promise<GoogleSheetSyncResult> {
+    return this.sheetMonitoring.sync(dto);
+  }
+
+  @Post('sheet/refresh')
+  refreshSheet(): Promise<GoogleSheetState> {
+    return this.sheetMonitoring.refresh();
   }
 
   @Post('run')

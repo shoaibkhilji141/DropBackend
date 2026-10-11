@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SearchEbayResearchDto = exports.ListOnEbayDto = exports.ListingAspectDto = exports.MatchAliExpressQueryDto = exports.EbayItemInsightQueryDto = exports.UpdateProductDto = exports.ListProductsQueryDto = exports.SearchSupplierProductsDto = exports.DERIVED_SORTS = void 0;
+exports.OptimizeEbayListingDto = exports.SearchEbayResearchDto = exports.ListOnEbayDto = exports.ListingAspectDto = exports.MatchAliExpressQueryDto = exports.EbayItemInsightQueryDto = exports.UpdateProductDto = exports.ListProductsQueryDto = exports.SearchSupplierProductsDto = exports.DERIVED_SORTS = void 0;
 const openapi = require("@nestjs/swagger");
 const swagger_1 = require("@nestjs/swagger");
 const client_1 = require("@prisma/client");
@@ -465,4 +465,17 @@ __decorate([
     (0, class_validator_1.Max)(200),
     __metadata("design:type", Number)
 ], SearchEbayResearchDto.prototype, "page", void 0);
+class OptimizeEbayListingDto {
+    url;
+    static _OPENAPI_METADATA_FACTORY() {
+        return { url: { required: true, type: () => String, maxLength: 500 } };
+    }
+}
+exports.OptimizeEbayListingDto = OptimizeEbayListingDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(500),
+    __metadata("design:type", String)
+], OptimizeEbayListingDto.prototype, "url", void 0);
 //# sourceMappingURL=product.dto.js.map

@@ -96,11 +96,15 @@ export interface SupplierSearchResult {
  * the products module after the provider returns, because they are derived from
  * our own pricing rules rather than supplier data.
  */
+export interface SupplierLookupOptions {
+  includeFreight?: boolean;
+}
+
 export interface SupplierProductProvider {
   readonly name: string;
   isConfigured(): boolean;
   search(query: SupplierSearchQuery): Promise<SupplierSearchResult>;
-  getByExternalId(externalId: string): Promise<SupplierProduct | null>;
+  getByExternalId(externalId: string, options?: SupplierLookupOptions): Promise<SupplierProduct | null>;
 }
 
 export const SUPPLIER_PRODUCT_PROVIDER = Symbol('SUPPLIER_PRODUCT_PROVIDER');

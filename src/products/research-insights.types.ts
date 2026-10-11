@@ -93,6 +93,23 @@ export interface SeoRecommendationView {
   note: string;
 }
 
+export type DiagnosisPriority = 'critical' | 'high' | 'medium';
+
+export interface SalesDiagnosisItem {
+  id: string;
+  title: string;
+  priority: DiagnosisPriority;
+  status: 'pass' | 'warn' | 'fail';
+  change: string;
+  why: string;
+}
+
+export interface SalesDiagnosisView {
+  firstMove: string;
+  summary: string;
+  items: SalesDiagnosisItem[];
+}
+
 export interface EbayItemInsightView {
   item: EbayItemDetail;
   marketplace: string;
@@ -101,6 +118,8 @@ export interface EbayItemInsightView {
   sales: SalesHistoryView;
   keywords: KeywordInsightsView;
   seo: SeoRecommendationView;
+  competitors: EbayMarketplaceItem[];
+  diagnosis: SalesDiagnosisView;
 }
 
 export interface AliExpressInsightView {

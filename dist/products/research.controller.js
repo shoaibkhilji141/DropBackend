@@ -42,6 +42,9 @@ let ResearchController = class ResearchController {
     getEbayInsight(itemId) {
         return this.insights.getInsight(itemId);
     }
+    optimizeEbayListing(dto) {
+        return this.insights.optimizeListing(dto.url);
+    }
     getAliExpressInsight(externalId) {
         return this.insights.getAliExpressInsight(externalId);
     }
@@ -86,6 +89,17 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", void 0)
 ], ResearchController.prototype, "getEbayInsight", null);
+__decorate([
+    (0, common_1.Post)('ebay/optimize'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Analyse a public eBay listing URL against similar sold listings and draft sales copy',
+    }),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [product_dto_1.OptimizeEbayListingDto]),
+    __metadata("design:returntype", void 0)
+], ResearchController.prototype, "optimizeEbayListing", null);
 __decorate([
     (0, common_1.Get)('aliexpress/insight'),
     (0, swagger_1.ApiOperation)({

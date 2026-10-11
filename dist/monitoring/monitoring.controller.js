@@ -20,13 +20,17 @@ const swagger_1 = require("@nestjs/swagger");
 const client_1 = require("@prisma/client");
 const redis_module_1 = require("../redis/redis.module");
 const monitoring_dto_1 = require("./dto/monitoring.dto");
+const sheet_monitoring_dto_1 = require("./dto/sheet-monitoring.dto");
 const monitoring_service_1 = require("./monitoring.service");
+const sheet_monitoring_service_1 = require("./sheet-monitoring.service");
 let MonitoringController = class MonitoringController {
     monitoringService;
+    sheetMonitoring;
     configService;
     redis;
-    constructor(monitoringService, configService, redis) {
+    constructor(monitoringService, sheetMonitoring, configService, redis) {
         this.monitoringService = monitoringService;
+        this.sheetMonitoring = sheetMonitoring;
         this.configService = configService;
         this.redis = redis;
     }
@@ -88,6 +92,21 @@ let MonitoringController = class MonitoringController {
     }
     updateRule(id, dto) {
         return this.monitoringService.updateRule(id, dto);
+    }
+    sheet() {
+        return this.sheetMonitoring.getState();
+    }
+    saveSheet(dto) {
+        return this.sheetMonitoring.save(dto);
+    }
+    previewSheet(dto) {
+        return this.sheetMonitoring.preview(dto);
+    }
+    syncSheet(dto) {
+        return this.sheetMonitoring.sync(dto);
+    }
+    refreshSheet() {
+        return this.sheetMonitoring.refresh();
     }
     run(dto) {
         if (dto.type) {
@@ -206,6 +225,44 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], MonitoringController.prototype, "updateRule", null);
 __decorate([
+    (0, common_1.Get)('sheet'),
+    openapi.ApiResponse({ status: 200, type: Object }),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], MonitoringController.prototype, "sheet", null);
+__decorate([
+    (0, common_1.Post)('sheet'),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [sheet_monitoring_dto_1.SaveGoogleSheetDto]),
+    __metadata("design:returntype", Promise)
+], MonitoringController.prototype, "saveSheet", null);
+__decorate([
+    (0, common_1.Post)('sheet/preview'),
+    openapi.ApiResponse({ status: 201, type: [Object] }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [sheet_monitoring_dto_1.SaveGoogleSheetDto]),
+    __metadata("design:returntype", Promise)
+], MonitoringController.prototype, "previewSheet", null);
+__decorate([
+    (0, common_1.Post)('sheet/sync'),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [sheet_monitoring_dto_1.SaveGoogleSheetDto]),
+    __metadata("design:returntype", Promise)
+], MonitoringController.prototype, "syncSheet", null);
+__decorate([
+    (0, common_1.Post)('sheet/refresh'),
+    openapi.ApiResponse({ status: 201, type: Object }),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], MonitoringController.prototype, "refreshSheet", null);
+__decorate([
     (0, common_1.Post)('run'),
     openapi.ApiResponse({ status: 201, type: [Object] }),
     __param(0, (0, common_1.Body)()),
@@ -216,8 +273,9 @@ __decorate([
 exports.MonitoringController = MonitoringController = __decorate([
     (0, swagger_1.ApiTags)('monitoring'),
     (0, common_1.Controller)('monitoring'),
-    __param(2, (0, common_1.Inject)(redis_module_1.REDIS_CLIENT)),
+    __param(3, (0, common_1.Inject)(redis_module_1.REDIS_CLIENT)),
     __metadata("design:paramtypes", [monitoring_service_1.MonitoringService,
+        sheet_monitoring_service_1.SheetMonitoringService,
         config_1.ConfigService,
         redis_module_1.RedisClientHost])
 ], MonitoringController);

@@ -104,7 +104,8 @@ export class IntegrationAccountsService {
   }
 
   isExpired(account: IntegrationAccount | null, skewMs = 60_000): boolean {
-    if (!account?.tokenExpiresAt) return false;
+    if (!account?.accessToken) return true;
+    if (!account.tokenExpiresAt) return Boolean(account.refreshToken);
     return account.tokenExpiresAt.getTime() <= Date.now() + skewMs;
   }
 }

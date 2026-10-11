@@ -44,6 +44,8 @@ import {
   EbayItemInsightView,
   KeywordInsightsView,
   KeywordRow,
+  SalesDiagnosisItem,
+  SalesDiagnosisView,
   SalesHistoryView,
   SalesObservationRow,
   SalesVelocityRow,
@@ -147,9 +149,11 @@ export class ResearchInsightsService {
       }),
     ]);
 
-    const keywords = this.buildKeywords(item, competitors, suggestions);
+    const peers = competitors.filter((listing) => listing.itemId !== item.itemId && listing.soldCount > 0);
+    const keywords = this.buildKeywords(item, peers.length ? peers : competitors, suggestions);
     const sales = this.buildSales(item, snapshots);
-    const seo = await this.buildSeo(item, keywords, categoryAspects);
+    const diagnosis = this.buildDiagnosis(item, peers, keywords, categoryAspects);
+    const seo = await this.buildSeo(item, keywords, categoryAspects, diagnosis);
 
     return {
       item,
@@ -158,7 +162,19 @@ export class ResearchInsightsService {
       sales,
       keywords,
       seo,
+      competitors: peers.slice(0, 12),
+      diagnosis,
     };
+  }
+
+  async optimizeListing(url: string): Promise<EbayItemInsightView> {
+    const itemId = this.ebayClient.listingIdFromInput(url);
+    if (!itemId) {
+      throw new BadRequestException(
+        'Paste a full eBay listing link, for example https://www.ebay.co.uk/itm/123456789012',
+      );
+    }
+    return this.getInsight(itemId);
   }
 
   async getAliExpressInsight(externalId: string): Promise<AliExpressInsightView> {
@@ -558,13 +574,18 @@ export class ResearchInsightsService {
     item: EbayItemDetail,
     keywords: KeywordInsightsView,
     categoryAspects: EbayCategoryAspect[],
+    diagnosis?: SalesDiagnosisView,
   ): Promise<SeoRecommendationView> {
     const fallback = this.heuristicSeo(item, keywords, categoryAspects);
     const mined = keywords.topPhrases.map((row) => row.phrase);
+    const drawbacks = (diagnosis?.items ?? [])
+      .filter((row) => row.status !== 'pass')
+      .map((row) => `${row.title}: ${row.change}`);
     const cacheKey = this.cache.key('ebay:seo', {
       title: item.title,
       category: item.categoryId,
       seed: keywords.seed,
+      gaps: drawbacks.slice(0, 6).join('|'),
     });
 
     try {
@@ -580,8 +601,9 @@ export class ResearchInsightsService {
             requestedAspectNames: categoryAspects.map((aspect) => aspect.name),
             priceHint: item.price,
             currency: item.currency,
+            drawbacks,
           }),
-          AI_SEO_TIMEOUT_MS,
+          20_000,
         ),
       );
       keywords.aiKeywords = ai.keywords;
@@ -680,6 +702,194 @@ export class ResearchInsightsService {
         };
       })
       .sort((a, b) => Number(b.required) - Number(a.required) || Number(b.usedForSearch) - Number(a.usedForSearch));
+  }
+
+  private buildDiagnosis(
+    item: EbayItemDetail,
+    soldPeers: EbayMarketplaceItem[],
+    keywords: KeywordInsightsView,
+    categoryAspects: EbayCategoryAspect[],
+  ): SalesDiagnosisView {
+    const soldPrices = soldPeers.map((peer) => peer.price).filter((price) => price > 0).sort((a, b) => a - b);
+    const medianSoldPrice = soldPrices.length ? soldPrices[Math.floor(soldPrices.length / 2)] : null;
+    const medianSoldUnits = median(
+      soldPeers.map((peer) => peer.soldCount).filter((units) => units > 0),
+    );
+    const thisSold = item.soldCount || 0;
+    const landed = item.price + (item.shippingCost ?? 0);
+    const requiredMissing = categoryAspects.filter(
+      (aspect) =>
+        aspect.required &&
+        !item.aspects.some((row) => row.name.toLowerCase() === aspect.name.toLowerCase()),
+    );
+    const descriptionLength = (item.shortDescription || htmlPreview(item.descriptionHtml) || '').length;
+
+    const items: SalesDiagnosisItem[] = [
+      {
+        id: 'demand',
+        title: 'Product demand',
+        priority: 'critical',
+        status: soldPeers.length >= 3 ? 'pass' : soldPeers.length > 0 ? 'warn' : 'fail',
+        change:
+          soldPeers.length >= 3
+            ? `${soldPeers.length} similar listings have sales. Demand is there — the listing has to convert.`
+            : soldPeers.length > 0
+              ? 'Only a few similar items have sold. Confirm buyers still search this product on eBay UK.'
+              : 'No similar sold listings found. This product may not have enough eBay UK demand.',
+        why: 'Buyers must already be searching and buying this type of item. Views on a weak product will not become orders.',
+      },
+      {
+        id: 'title',
+        title: 'SEO-friendly title',
+        priority: 'critical',
+        status:
+          item.title.length >= 60 && item.title.length <= 80 && keywords.missingFromTitle.length <= 3
+            ? 'pass'
+            : item.title.length >= 40
+              ? 'warn'
+              : 'fail',
+        change:
+          keywords.missingFromTitle.length > 0
+            ? `Rewrite the title to 60–80 characters and add: ${keywords.missingFromTitle
+                .slice(0, 4)
+                .map((row) => row.phrase)
+                .join(', ')}.`
+            : `Title is ${item.title.length}/80 characters. Use brand, type, colour, size and the phrase buyers search.`,
+        why: 'Best Match finds titles that match what buyers type. Irrelevant words and stuffing waste the 80-character limit.',
+      },
+      {
+        id: 'photos',
+        title: 'High-quality photos',
+        priority: 'high',
+        status: item.images.length >= 6 ? 'pass' : item.images.length >= 3 ? 'warn' : 'fail',
+        change: `${item.images.length} photos found. Add clear angles, colour, condition and any defects — eBay allows 12.`,
+        why: 'Photos create purchase confidence. Weak images lose buyers who already clicked through.',
+      },
+      {
+        id: 'price',
+        title: 'Competitive total price',
+        priority: 'critical',
+        status:
+          medianSoldPrice == null
+            ? 'warn'
+            : landed <= medianSoldPrice * 1.08
+              ? 'pass'
+              : landed <= medianSoldPrice * 1.2
+                ? 'warn'
+                : 'fail',
+        change:
+          medianSoldPrice == null
+            ? `This listing is £${landed.toFixed(2)} including postage. Compare against recent sold prices.`
+            : `This listing is £${landed.toFixed(2)} including postage vs a sold-comp median of £${medianSoldPrice.toFixed(2)}. ${
+                landed > medianSoldPrice * 1.08
+                  ? 'Lower the item price or postage so the delivered total is closer to what is actually selling.'
+                  : 'Delivered price is in a competitive range.'
+              }`,
+        why: 'Buyers compare item + postage. An uncompetitive total cost explains views without sales.',
+      },
+      {
+        id: 'postage',
+        title: 'Delivery and postage',
+        priority: 'high',
+        status: item.shippingCost == null ? 'warn' : item.shippingCost === 0 ? 'pass' : item.shippingCost > 4 ? 'warn' : 'pass',
+        change:
+          item.shippingCost == null
+            ? 'Postage is unclear on the public listing. Set a realistic UK delivery estimate and handling time you can keep.'
+            : item.shippingCost === 0
+              ? 'Free postage is a strong Best Match signal. Keep dispatch times honest.'
+              : `Postage is £${item.shippingCost.toFixed(2)}${item.shippingService ? ` (${item.shippingService})` : ''}. Keep it competitive and promise only what you can dispatch.`,
+        why: 'eBay Best Match rewards complete, buyer-friendly postage. Late dispatch kills conversion and future rank.',
+      },
+      {
+        id: 'specifics',
+        title: 'Item specifics and description',
+        priority: 'high',
+        status:
+          requiredMissing.length === 0 && descriptionLength >= 80
+            ? 'pass'
+            : requiredMissing.length === 0
+              ? 'warn'
+              : 'fail',
+        change:
+          requiredMissing.length > 0
+            ? `Fill required specifics: ${requiredMissing
+                .slice(0, 6)
+                .map((aspect) => aspect.name)
+                .join(', ')}.`
+            : descriptionLength < 80
+              ? 'Write a clearer description: brand, model, size, compatibility, condition and what is included.'
+              : 'Specifics look complete. Keep condition and accessories explicit so buyers have no uncertainty.',
+        why: 'Complete specifics help Best Match and search filters. Uncertainty in the description stops the purchase.',
+      },
+      {
+        id: 'trust',
+        title: 'Seller trust',
+        priority: 'medium',
+        status:
+          item.topRatedSeller || (item.sellerFeedbackScore ?? 0) >= 50
+            ? 'pass'
+            : (item.sellerFeedbackScore ?? 0) >= 10
+              ? 'warn'
+              : 'warn',
+        change: item.topRatedSeller
+          ? 'Top-rated seller status already helps visibility.'
+          : `Feedback score ${item.sellerFeedbackScore ?? 0}${
+              item.sellerFeedbackPercentage != null ? `, ${item.sellerFeedbackPercentage}% positive` : ''
+            }. Accurate photos, fast replies and promised dispatch matter more on a newer account.`,
+        why: 'A private or new account creates uncertainty. Over-promise on delivery or condition will lose the sale.',
+      },
+      {
+        id: 'offers',
+        title: 'Offers and pricing strategy',
+        priority: 'medium',
+        status:
+          medianSoldPrice != null && landed > medianSoldPrice * 1.15 ? 'warn' : 'pass',
+        change:
+          medianSoldPrice != null && landed > medianSoldPrice * 1.15
+            ? 'Test Best Offer or a small price drop. Do not discount every product — only where sold comps are cheaper.'
+            : 'Price is close enough that a blanket discount is not required. Watch sold comps before cutting further.',
+        why: 'Best Offer can convert watchers, but paid promotion will not fix weak demand or an uncompetitive total price.',
+      },
+      {
+        id: 'performance',
+        title: 'Listing performance',
+        priority: 'high',
+        status:
+          medianSoldUnits != null && thisSold >= medianSoldUnits * 0.6
+            ? 'pass'
+            : thisSold > 0
+              ? 'warn'
+              : 'fail',
+        change:
+          thisSold === 0
+            ? `This listing shows ${thisSold} sold vs similar sold listings (median ${medianSoldUnits ?? 0} units). Treat views as a warning: buyers are looking, not buying.`
+            : `This listing has ${thisSold} sold. Similar sold listings sit around ${medianSoldUnits ?? 'n/a'} units. Track impressions, views, watchers and orders separately.`,
+        why: 'Impressions and views are not success. If people open the listing and leave, fix price, postage, photos and confidence.',
+      },
+      {
+        id: 'testing',
+        title: 'Consistency and testing',
+        priority: 'medium',
+        status: 'warn',
+        change:
+          'Change one major factor at a time: title keywords, then delivered price, then photos. Review after a few days of impressions.',
+        why: 'Changing everything at once hides what actually improved Best Match or conversion.',
+      },
+    ];
+
+    const firstFail = items.find((row) => row.status === 'fail') ?? items.find((row) => row.status === 'warn');
+    const firstMove = firstFail
+      ? `First change: ${firstFail.title}. ${firstFail.change}`
+      : 'Listing looks competitive against sold comps. Keep monitoring sold prices and do not chase views alone.';
+
+    return {
+      firstMove,
+      summary:
+        soldPeers.length > 0
+          ? `${soldPeers.length} similar eBay UK listings have sales. Goal is the right buyers finding this listing, trusting it, and completing the purchase — not more views.`
+          : 'Few sold comps were found. Confirm demand on eBay UK Sold listings before spending time on title tests or promotions.',
+      items,
+    };
   }
 
   private checklist(
@@ -812,6 +1022,12 @@ function packTitle(seed: string, extras: string[]): string {
     title = next;
   }
   return title.slice(0, 80) || seed.slice(0, 80);
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)] ?? null;
 }
 
 function htmlPreview(value: string | null): string {
